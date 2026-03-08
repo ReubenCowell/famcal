@@ -4,6 +4,8 @@
     "refresh_interval_seconds": 3600,
     "host": "0.0.0.0",
     "port": 8000,
-    "domain": "cowellfamilycalendar.live"
+    "domain": "cowellfamilycalendar.live",
+    "website_password": "",
+    "secret_key": ""
   }
 }

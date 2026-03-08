@@ -47,7 +47,9 @@ if [ ! -f "$INSTALL_DIR/family_config.json" ]; then
     "refresh_interval_seconds": 3600,
     "host": "0.0.0.0",
     "port": 8000,
-    "domain": ""
+    "domain": "",
+    "website_password": "",
+    "secret_key": ""
   }
 }
 EOF

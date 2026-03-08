@@ -15,7 +15,9 @@
         <div class="nav-links">
             <a href="/" class="active">Calendar</a>
             <a href="/admin">Admin</a>
-            <a href="/logout" id="logoutLink" style="display:none;">Logout</a>
+            {% if auth_enabled %}
+            <a href="/logout" id="logoutLink">Logout</a>
+            {% endif %}
             <button class="theme-toggle" title="Toggle theme">&#9684;</button>
         </div>
     </nav>
@@ -1033,13 +1035,6 @@
     function formatTimeRange(startISO, endISO) {
         return DateUtils.formatTimeRange(startISO, endISO);
     }
-
-    // Check if password is set to show/hide logout link
-    fetch('/login').then(r => r.text()).then(html => {
-        if (html.includes('Enter the family password')) {
-            document.getElementById('logoutLink').style.display = '';
-        }
-    }).catch(() => {});
 
     function esc(s) {
         if (!s) return '';

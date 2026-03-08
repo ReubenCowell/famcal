@@ -24,6 +24,7 @@ import logging
 import os
 import re
 import threading
+from hmac import compare_digest
 from uuid import uuid4
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
@@ -32,7 +33,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import requests
-from flask import Flask, Response, g, jsonify, render_template, request, url_for
+from flask import Flask, Response, g, jsonify, redirect, render_template, request, session, url_for
 from icalendar import Calendar, Event
 
 # Database integration (Phase 1: Dual-write mode)
@@ -49,6 +50,8 @@ DEFAULT_CONFIG_FILE = "family_config.json"
 DEFAULT_REFRESH_SECONDS = 3600
 MAX_CALENDAR_URL_LENGTH = 2048
 MAX_EVENT_TEXT_LENGTH = 4096
+MAX_WEBSITE_PASSWORD_LENGTH = 256
+MAX_SECRET_KEY_LENGTH = 512
 DEFAULT_MEMBER_COLOR = "#0078d4"
 ALLOWED_SOURCE_TYPES = {"ics", "caldav"}
 USE_DATABASE = os.getenv("FAMCAL_USE_DATABASE", "false").lower() == "true"  # Feature flag
@@ -100,6 +103,8 @@ class ServerConfig:
     host: str = "0.0.0.0"
     port: int = 8000
     domain: str | None = None
+    website_password: str = ""
+    secret_key: str = ""
 
 
 @dataclass
@@ -246,11 +251,29 @@ class FamilyCalendarManager:
         domain_raw = _safe_text(server_settings.get("domain", ""), max_len=255)
         domain = domain_raw or None
 
+        website_password = str(server_settings.get("website_password", "") or "")
+        if len(website_password) > MAX_WEBSITE_PASSWORD_LENGTH:
+            logging.warning(
+                "website_password is too long; truncating to %d characters",
+                MAX_WEBSITE_PASSWORD_LENGTH,
+            )
+            website_password = website_password[:MAX_WEBSITE_PASSWORD_LENGTH]
+
+        secret_key = str(server_settings.get("secret_key", "") or "")
+        if len(secret_key) > MAX_SECRET_KEY_LENGTH:
+            logging.warning(
+                "secret_key is too long; truncating to %d characters",
+                MAX_SECRET_KEY_LENGTH,
+            )
+            secret_key = secret_key[:MAX_SECRET_KEY_LENGTH]
+
         self.server_config = ServerConfig(
             refresh_interval_seconds=refresh_interval_seconds,
             host=host,
             port=port,
             domain=domain,
+            website_password=website_password,
+            secret_key=secret_key,
         )
 
         logging.info("Loaded validated config for %d family members", len(self.members))
@@ -282,7 +305,9 @@ class FamilyCalendarManager:
                 "refresh_interval_seconds": self.server_config.refresh_interval_seconds,
                 "host": self.server_config.host,
                 "port": self.server_config.port,
-                "domain": self.server_config.domain or ""
+                "domain": self.server_config.domain or "",
+                "website_password": self.server_config.website_password,
+                "secret_key": self.server_config.secret_key,
             }
         }
         
@@ -1125,6 +1150,55 @@ def create_app(manager: FamilyCalendarManager, fetch_timeout: int) -> Flask:
     global USE_DATABASE
     app = Flask(__name__)
     app.json.sort_keys = False
+
+    # Keep a stable secret key so sessions work across workers/restarts.
+    configured_secret_key = os.getenv("FAMCAL_SECRET_KEY", "").strip() or os.getenv("SECRET_KEY", "").strip()
+    if not configured_secret_key:
+        configured_secret_key = manager.server_config.secret_key
+    if not configured_secret_key:
+        secret_seed = "|".join([
+            str(manager.config_path.resolve()),
+            manager.server_config.domain or "",
+            manager.server_config.host,
+            str(manager.server_config.port),
+        ])
+        configured_secret_key = hashlib.sha256(secret_seed.encode("utf-8")).hexdigest()
+        logging.warning(
+            "No explicit secret key configured; using deterministic fallback. "
+            "Set FAMCAL_SECRET_KEY or server_settings.secret_key for stronger security."
+        )
+    app.secret_key = configured_secret_key
+    app.config["SESSION_COOKIE_HTTPONLY"] = True
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+
+    def _configured_site_password() -> str:
+        env_password = os.getenv("FAMCAL_WEB_PASSWORD")
+        if env_password is not None:
+            return env_password
+        return manager.server_config.website_password
+
+    def _auth_enabled() -> bool:
+        return bool(_configured_site_password())
+
+    def _is_public_path(path: str) -> bool:
+        if path.startswith("/static/"):
+            return True
+        if path in {"/login", "/logout", "/favicon.ico", "/family/calendar.ics"}:
+            return True
+        return bool(re.match(r"^/[a-z0-9_]+/calendar\.ics$", path))
+
+    def _safe_next_path(raw_value: str | None) -> str:
+        if not raw_value:
+            return url_for("index")
+        parsed = urlparse(raw_value)
+        if parsed.scheme or parsed.netloc:
+            return url_for("index")
+        path = parsed.path or "/"
+        if not path.startswith("/") or path in {"/login", "/logout"} or _is_public_path(path):
+            return url_for("index")
+        if parsed.query:
+            return f"{path}?{parsed.query}"
+        return path
     
     # Initialize database if available and enabled
     if DATABASE_AVAILABLE and USE_DATABASE:
@@ -1149,6 +1223,23 @@ def create_app(manager: FamilyCalendarManager, fetch_timeout: int) -> Flask:
         incoming_request_id = (request.headers.get("X-Request-ID") or "").strip()
         g.request_id = incoming_request_id[:120] if incoming_request_id else f"req-{uuid4().hex[:16]}"
 
+    @app.before_request
+    def require_site_password() -> Response | tuple[Response, int] | None:
+        if not _auth_enabled():
+            return None
+
+        path = request.path or "/"
+        if _is_public_path(path):
+            return None
+        if session.get("authenticated"):
+            return None
+
+        if path.startswith("/api/"):
+            return jsonify({"error": "Authentication required"}), 401
+
+        next_path = request.full_path if request.query_string else path
+        return redirect(url_for("login", next=next_path))
+
     @app.after_request
     def add_request_id_header(response: Response) -> Response:
         request_id = _request_id()
@@ -1156,15 +1247,47 @@ def create_app(manager: FamilyCalendarManager, fetch_timeout: int) -> Flask:
         logging.info("rid=%s %s %s %s", request_id, request.method, request.path, response.status_code)
         return response
 
+    @app.route("/login", methods=["GET", "POST"])
+    def login() -> Response:
+        """Password-only login page."""
+        if not _auth_enabled():
+            return redirect(url_for("index"))
+
+        next_path = _safe_next_path(request.args.get("next"))
+        if request.method == "POST":
+            submitted_password = request.form.get("password", "")
+            submitted_password = submitted_password[: MAX_WEBSITE_PASSWORD_LENGTH * 4]
+            next_path = _safe_next_path(request.form.get("next"))
+
+            configured_password = _configured_site_password()
+            if configured_password and compare_digest(submitted_password, configured_password):
+                session["authenticated"] = True
+                session.permanent = True
+                return redirect(next_path)
+
+            return render_template(
+                "login.html",
+                error="Incorrect password. Please try again.",
+                next_path=next_path,
+            ), 401
+
+        return render_template("login.html", error=None, next_path=next_path)
+
+    @app.get("/logout")
+    def logout() -> Response:
+        """Clear auth session and return to login."""
+        session.clear()
+        return redirect(url_for("login") if _auth_enabled() else url_for("index"))
+
     @app.get("/")
     def index():
         """Main web interface."""
-        return render_template("family_index.html")
+        return render_template("family_index.html", auth_enabled=_auth_enabled())
 
     @app.get("/admin")
     def admin():
         """Admin interface to manage calendars."""
-        return render_template("admin.html")
+        return render_template("admin.html", auth_enabled=_auth_enabled())
 
     @app.get("/api/members")
     def api_members() -> Response:

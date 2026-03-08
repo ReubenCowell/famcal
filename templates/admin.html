@@ -15,6 +15,9 @@
         <div class="nav-links">
             <a href="/">Calendar</a>
             <a href="/admin" class="active">Admin</a>
+            {% if auth_enabled %}
+            <a href="/logout">Logout</a>
+            {% endif %}
             <button class="theme-toggle" title="Toggle theme">&#9684;</button>
         </div>
     </nav>

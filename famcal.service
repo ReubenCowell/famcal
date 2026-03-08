@@ -11,6 +11,8 @@ Environment="PATH=/home/pi/famcal/.venv/bin"
 Environment="FAMCAL_USE_DATABASE=true"
 Environment="FAMCAL_DATABASE_ICS=true"
 Environment="SQLALCHEMY_DATABASE_URL=postgresql://famcal_user:YOUR_PASSWORD@localhost:5432/famcal_db"
+Environment="FAMCAL_WEB_PASSWORD=YOUR_SITE_PASSWORD"
+Environment="FAMCAL_SECRET_KEY=YOUR_RANDOM_SECRET_KEY"
 ExecStart=/home/pi/famcal/.venv/bin/python /home/pi/famcal/family_calendar_server.py --config /home/pi/famcal/family_config.json
 Restart=always
 RestartSec=10

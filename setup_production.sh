@@ -214,6 +214,12 @@ SQLALCHEMY_DATABASE_URL=$DB_URL
 # Application Configuration
 FAMILY_CONFIG=family_config.json
 LOG_LEVEL=INFO
+
+# Optional website password gate (preferred over plain-text config password)
+# FAMCAL_WEB_PASSWORD=change-me
+
+# Optional override for Flask session signing key
+# FAMCAL_SECRET_KEY=replace-with-long-random-value
 EOF
     
     echo -e "${GREEN}✓${NC} Database configuration saved to .env"
@@ -242,7 +248,9 @@ if [ ! -f "family_config.json" ]; then
     "refresh_interval_seconds": 3600,
     "host": "0.0.0.0",
     "port": 8000,
-    "domain": ""
+    "domain": "",
+    "website_password": "",
+    "secret_key": ""
   }
 }
 EOF
@@ -295,8 +303,8 @@ echo "Your Family Calendar is configured and ready."
 echo ""
 echo "Next steps:"
 echo ""
-echo "1. Update domain in family_config.json:"
-echo "   {\"server_settings\": {\"domain\": \"your-domain.com\"}}"
+echo "1. Update domain/password in family_config.json (or use FAMCAL_WEB_PASSWORD in .env):"
+echo "   {\"server_settings\": {\"domain\": \"your-domain.com\", \"website_password\": \"your-password\"}}"
 echo ""
 echo "2. Set up systemd service:"
 echo "   sudo cp famcal.service /etc/systemd/system/"

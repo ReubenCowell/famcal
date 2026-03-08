@@ -8,6 +8,7 @@ A self-hosted family calendar service that merges ICS feeds from any calendar pr
 - **Dynamic family members** — managed entirely through the admin UI
 - **Per-member ICS feeds** — subscribable `/<member_id>/calendar.ics` URLs
 - **CalDAV support** — Subscribe to CalDAV calendars with automatic background syncing
+- **Password-protected UI** — optional password-only login for web/admin/API access
 - **Privacy mode** — per-calendar toggle: full details or "Busy" only
 - **Color-coded members** with filter pills to toggle visibility
 - **Mobile-friendly** responsive design
@@ -23,6 +24,15 @@ python family_calendar_server.py --config family_config.json
 ```
 
 Open `http://localhost:8000` for the calendar, `http://localhost:8000/admin` to add family members.
+
+### Optional website password
+
+To require a password before opening the web UI, set either:
+
+- `server_settings.website_password` in `family_config.json`
+- `FAMCAL_WEB_PASSWORD` as an environment variable (preferred)
+
+When enabled, UI pages and `/api/*` require login. ICS feed URLs remain accessible for calendar subscriptions.
 
 ### Subscribe to feeds
 

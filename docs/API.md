@@ -6,12 +6,21 @@
 |--------|------|-------------|
 | `GET` | `/` | Calendar viewer UI |
 | `GET` | `/admin` | Admin UI |
+| `GET`/`POST` | `/login` | Password-only login page |
+| `GET` | `/logout` | Clear session and return to login |
 | `GET` | `/api/members` | List all members with feed URLs and colors |
 | `GET` | `/api/status` | Refresh status for all members |
 | `GET` | `/api/<member_id>/status` | Status for one member |
 | `GET` | `/api/<member_id>/events` | Events for one member (optional `?start=&end=`) |
 | `GET` | `/api/events` | Combined events for multiple members |
 | `GET` | `/<member_id>/calendar.ics` | Subscribable ICS feed |
+
+## Authentication (Optional)
+
+Set `server_settings.website_password` in `family_config.json` or `FAMCAL_WEB_PASSWORD` in the environment to require login.
+
+- UI pages and `/api/*` require an authenticated session.
+- ICS feeds (`/family/calendar.ics`, `/<member_id>/calendar.ics`) stay public for calendar app subscriptions.
 
 ## Combined Events Query Parameters
 
