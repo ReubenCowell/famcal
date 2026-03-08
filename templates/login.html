@@ -18,10 +18,21 @@
         <form method="POST" action="/login">
             <div class="form-group">
                 <label for="password">Password</label>
-                <input type="password" id="password" name="password" required autofocus placeholder="Enter password">
+                <div style="position:relative">
+                    <input type="password" id="password" name="password" required autofocus placeholder="Enter password" style="padding-right:3rem">
+                    <button type="button" onclick="togglePassword()" style="position:absolute;right:0.5rem;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:1.1rem;color:#888;padding:0.25rem" title="Show password">&#128065;</button>
+                </div>
             </div>
             <button type="submit" class="btn-login">Sign In</button>
         </form>
+        <script>
+        function togglePassword() {
+            const inp = document.getElementById('password');
+            const btn = event.currentTarget;
+            if (inp.type === 'password') { inp.type = 'text'; btn.title = 'Hide password'; btn.style.opacity = '1'; }
+            else { inp.type = 'password'; btn.title = 'Show password'; btn.style.opacity = '0.6'; }
+        }
+        </script>
     </div>
 </div>
 </body>

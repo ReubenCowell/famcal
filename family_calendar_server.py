@@ -81,6 +81,7 @@ class ServerConfig:
     port: int = 8000
     domain: str | None = None
     password_hash: str = ""
+    secret_key: str = ""
 
 
 @dataclass
@@ -149,7 +150,8 @@ class FamilyCalendarManager:
             host=server_settings.get("host", "0.0.0.0"),
             port=server_settings.get("port", 8000),
             domain=server_settings.get("domain"),
-            password_hash=server_settings.get("password_hash", "")
+            password_hash=server_settings.get("password_hash", ""),
+            secret_key=server_settings.get("secret_key", "")
         )
 
         logging.info("Loaded config for %d family members", len(self.members))
@@ -166,7 +168,8 @@ class FamilyCalendarManager:
                             "url": cal.url,
                             "name": cal.name,
                             "show_details": cal.show_details,
-                            "busy_text": cal.busy_text
+                            "busy_text": cal.busy_text,
+                            "show_location": cal.show_location
                         }
                         for cal in member.calendars
                     ]
@@ -178,7 +181,8 @@ class FamilyCalendarManager:
                 "host": self.server_config.host,
                 "port": self.server_config.port,
                 "domain": self.server_config.domain or "",
-                "password_hash": self.server_config.password_hash
+                "password_hash": self.server_config.password_hash,
+                "secret_key": self.server_config.secret_key
             }
         }
         
@@ -519,7 +523,11 @@ def create_app(manager: FamilyCalendarManager, fetch_timeout: int) -> Flask:
     """Create Flask application."""
     app = Flask(__name__)
     app.json.sort_keys = False
-    app.secret_key = os.getenv("SECRET_KEY", secrets.token_hex(32))
+    # Use a persistent secret key so sessions survive across Gunicorn workers and restarts
+    if not manager.server_config.secret_key:
+        manager.server_config.secret_key = secrets.token_hex(32)
+        manager.save_config()
+    app.secret_key = os.getenv("SECRET_KEY", manager.server_config.secret_key)
 
     # ===== Authentication =====
     PUBLIC_PATHS = {"/login", "/static"}
