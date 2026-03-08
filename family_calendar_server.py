@@ -399,8 +399,13 @@ def merge_member_calendars(
 
     for calendar_source in member.calendars:
         # Accept http://, https://, webcal://, and webcals:// URLs
-        if not calendar_source.url or not (calendar_source.url.startswith("http") or calendar_source.url.startswith("webcal")):
-            logging.warning("Skipping invalid URL for %s: %s", member.name, calendar_source.name)
+        if not calendar_source.url:
+            logging.warning("Skipping empty URL for %s: %s", member.name, calendar_source.name)
+            continue
+            
+        url_lower = calendar_source.url.lower()
+        if not url_lower.startswith(("http://", "https://", "webcal://", "webcals://")):
+            logging.warning("Skipping invalid URL for %s: %s (must start with http://, https://, webcal://, or webcals://)", member.name, calendar_source.url)
             continue
 
         try:
@@ -409,6 +414,7 @@ def merge_member_calendars(
                 if not calendar_source.caldav_username or not calendar_source.caldav_password:
                     logging.warning("Skipping CalDAV source without credentials: %s", calendar_source.name)
                     continue
+                logging.info("Fetching CalDAV calendar: %s for %s", calendar_source.name, member.name)
                 raw_data = fetch_caldav_calendar_data(
                     calendar_source.url,
                     calendar_source.caldav_username,
@@ -416,6 +422,7 @@ def merge_member_calendars(
                     timeout_seconds
                 )
             else:
+                logging.info("Fetching ICS calendar: %s for %s from %s", calendar_source.name, member.name, calendar_source.url)
                 raw_data = fetch_calendar_data(calendar_source.url, timeout_seconds)
             
             calendar = parse_calendar_data(raw_data, calendar_source.url)
@@ -444,7 +451,7 @@ def merge_member_calendars(
                 merged_events += 1
 
             successful_sources += 1
-            logging.info("Merged %s for %s", calendar_source.name, member.name)
+            logging.info("Successfully merged %s for %s (%d events, %d duplicates skipped)", calendar_source.name, member.name, merged_events, duplicates_skipped)
 
         except Exception as exc:
             logging.warning("Failed to fetch %s for %s: %s", calendar_source.name, member.name, exc)
@@ -633,6 +640,13 @@ def create_app(manager: FamilyCalendarManager, fetch_timeout: int) -> Flask:
         host = request.host if not domain else domain
         protocol = request.scheme if not domain else "https"
         
+        def _has_valid_url(url: str) -> bool:
+            """Check if URL is valid (supports http, https, webcal, webcals)."""
+            if not url:
+                return False
+            url_lower = url.lower()
+            return url_lower.startswith(("http://", "https://", "webcal://", "webcals://"))
+        
         members_data = [
             {
                 "id": member.id,
@@ -643,7 +657,7 @@ def create_app(manager: FamilyCalendarManager, fetch_timeout: int) -> Flask:
                 "calendars": [
                     {
                         "name": cal.name,
-                        "has_url": bool(cal.url and cal.url.startswith("http")),
+                        "has_url": _has_valid_url(cal.url),
                         "show_details": cal.show_details,
                         "busy_text": cal.busy_text,
                         "url": cal.url if cal.url else "",
@@ -682,6 +696,13 @@ def create_app(manager: FamilyCalendarManager, fetch_timeout: int) -> Flask:
         if member_id not in manager.members:
             return jsonify({"error": "Member not found"}), 404
 
+        def _has_valid_url(url: str) -> bool:
+            """Check if URL is valid (supports http, https, webcal, webcals)."""
+            if not url:
+                return False
+            url_lower = url.lower()
+            return url_lower.startswith(("http://", "https://", "webcal://", "webcals://"))
+
         member = manager.members[member_id]
         status = manager.statuses[member_id]
 
@@ -698,7 +719,7 @@ def create_app(manager: FamilyCalendarManager, fetch_timeout: int) -> Flask:
                 "calendars": [
                     {
                         "name": cal.name,
-                        "has_url": bool(cal.url and cal.url.startswith("http")),
+                        "has_url": _has_valid_url(cal.url),
                         "show_details": cal.show_details,
                         "busy_text": cal.busy_text,
                         "url": cal.url,

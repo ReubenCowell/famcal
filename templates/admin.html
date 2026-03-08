@@ -186,6 +186,7 @@
 
     let members = [];
     let statuses = {};
+    let refreshInterval = null;
 
     const $container = document.getElementById('membersContainer');
     const $empty = document.getElementById('adminEmpty');
@@ -202,6 +203,11 @@
     });
 
     loadData();
+    
+    // Auto-refresh status every 5 seconds to show syncing progress
+    refreshInterval = setInterval(() => {
+        fetchStatus();
+    }, 5000);
 
     async function checkPasswordStatus() {
         // Authentication removed - this function is now a no-op
@@ -214,6 +220,17 @@
     window.removePassword = async function() {
         // Authentication removed - this function is now a no-op
     };
+
+    async function fetchStatus() {
+        '''Fetch just the status without reloading member list to avoid flickering.'''
+        try {
+            const res = await fetch('/api/status');
+            statuses = await res.json() || {};
+            renderMembers();
+        } catch (e) {
+            // Silently ignore status fetch failures
+        }
+    }
 
     async function loadData() {
         try {
@@ -241,6 +258,9 @@
         let html = '';
         members.forEach(m => {
             const st = statuses[m.id] || {};
+            const isLoading = st.configured_sources > st.successful_sources && !st.last_error;
+            const isSynced = st.last_refresh_utc !== null;
+            
             html += `<div class="member-card">`;
             html += `<div class="member-card-header">`;
             html += `<div class="member-title"><span class="color-chip" style="background:${esc(m.color)}"></span><div><h2>${esc(m.name)}</h2><div class="feed-link">${esc(m.feed_url)}</div></div></div>`;
@@ -261,10 +281,14 @@
             });
             html += `</div></div></div>`;
 
-            // Status row
+            // Status row with improved visual feedback
             html += `<div class="status-row">`;
             html += `<span class="stat">Events: <b>${st.merged_events ?? '—'}</b></span>`;
-            html += `<span class="stat">Sources: <b>${st.successful_sources ?? '—'}/${st.configured_sources ?? '—'}</b></span>`;
+            html += `<span class="stat">Sources: <b>${st.successful_sources ?? '—'}/${st.configured_sources ?? '—'}</b>`;
+            if (isLoading) {
+                html += ` <span style="font-size:0.85em;color:var(--text-muted);font-weight:normal;">(syncing...)</span>`;
+            }
+            html += `</span>`;
             html += `<span class="stat">Updated: <b>${st.last_refresh_utc ? new Date(st.last_refresh_utc).toLocaleString() : 'Never'}</b></span>`;
             if (st.last_error) {
                 html += `<span class="stat" style="color:var(--busy);">Error: ${esc(st.last_error)}</span>`;
@@ -294,7 +318,14 @@
                     html += cal.show_details
                         ? '<span class="badge badge-details">Details shown</span>'
                         : `<span class="badge badge-privacy">Privacy mode</span> <span class="badge" style="background:var(--bg-card);color:var(--text-muted);border:1px solid var(--border);">${esc(cal.busy_text || 'Busy')}</span>`;
-                    html += `<div class="cal-url" title="${esc(cal.url)}">${cal.has_url ? esc(cal.url) : '<em>No URL</em>'}</div></div>`;
+                    
+                    // URL display with warning for missing URLs
+                    if (cal.has_url) {
+                        html += `<div class="cal-url" title="${esc(cal.url)}">${esc(cal.url)}</div>`;
+                    } else {
+                        html += `<div class="cal-url" style="color:var(--busy);font-style:italic;" title="No valid URL set"><strong>⚠ No URL configured</strong></div>`;
+                    }
+                    html += `</div>`;
                     html += `<div class="cal-actions">`;                    html += `<button class="btn btn-sm" onclick="editCalendar('${esc(m.id)}',${idx})" title="Edit calendar">&#9998; Edit</button>`;                    if (!cal.show_details) {
                         html += `<button class="btn btn-sm" onclick="editBusyText('${esc(m.id)}',${idx},'${esc(cal.busy_text || 'Busy')}')">&#9998; Busy text</button>`;
                     }
@@ -405,6 +436,18 @@
         const source_type = document.querySelector('input[name="fCalSourceType"]:checked').value;
         const caldav_username = document.getElementById('fCalDAVUsername').value.trim();
         const caldav_password = document.getElementById('fCalDAVPassword').value.trim();
+        
+        // Validate URL is not empty and has proper protocol
+        if (!url) {
+            toast('Please enter a calendar URL', 'error');
+            return;
+        }
+        
+        const url_lower = url.toLowerCase();
+        if (!url_lower.startsWith(('http://', 'https://', 'webcal://', 'webcals://'))) {
+            toast('URL must start with http://, https://, webcal://, or webcals://', 'error');
+            return;
+        }
         
         try {
             const res = await fetch(`/api/admin/members/${encodeURIComponent(mid)}/calendars`, {
