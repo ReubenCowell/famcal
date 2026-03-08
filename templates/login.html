@@ -5,10 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Family Calendar &ndash; Login</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="{{ url_for('static', filename='theme.js') }}"></script>
 </head>
 <body>
 <div class="login-container">
     <div class="login-box">
+        <div style="display:flex;justify-content:flex-end;margin:-8px -8px 0 0;">
+            <button class="theme-toggle" style="background:var(--surface-alt);color:var(--text-secondary);border:1px solid var(--border-strong);">&#9684;</button>
+        </div>
         <div class="login-icon">&#128197;</div>
         <h1>Family Calendar</h1>
         <p>Enter the family password to continue.</p>

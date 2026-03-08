@@ -716,11 +716,13 @@ def create_app(manager: FamilyCalendarManager, fetch_timeout: int) -> Flask:
                 event["SUMMARY"] = f"{member.name}: {summary}"
                 combined.add_component(event)
 
+        disposition = "attachment" if request.args.get("download") == "1" else "inline"
+
         return Response(
             combined.to_ical(),
             mimetype="text/calendar; charset=utf-8",
             headers={
-                "Content-Disposition": "inline; filename=family_calendar.ics",
+                "Content-Disposition": f"{disposition}; filename=family_calendar.ics",
                 "X-Calendar-Name": "Family Calendar"
             },
         )
@@ -745,12 +747,13 @@ def create_app(manager: FamilyCalendarManager, fetch_timeout: int) -> Flask:
 
         member = manager.members[member_id]
         filename = f"{member_id}_calendar.ics"
+        disposition = "attachment" if request.args.get("download") == "1" else "inline"
 
         return Response(
             ics_payload,
             mimetype="text/calendar; charset=utf-8",
             headers={
-                "Content-Disposition": f"inline; filename={filename}",
+                "Content-Disposition": f"{disposition}; filename={filename}",
                 "X-Calendar-Name": f"{member.name}'s Calendar"
             },
         )
@@ -846,6 +849,35 @@ def create_app(manager: FamilyCalendarManager, fetch_timeout: int) -> Flask:
 
         except Exception as exc:
             logging.exception("Failed to add member")
+            return jsonify({"success": False, "error": str(exc)}), 500
+
+    @app.put("/api/admin/members/<member_id>")
+    def api_admin_update_member(member_id: str) -> Response:
+        """Update a family member's name and/or color."""
+        try:
+            if member_id not in manager.members:
+                return jsonify({"success": False, "error": "Member not found"}), 404
+
+            data = request.get_json()
+            member = manager.members[member_id]
+
+            if "name" in data:
+                name = data["name"].strip()
+                if name:
+                    member.name = name
+
+            if "color" in data:
+                color = data["color"].strip()
+                if re.match(r'^#[0-9a-fA-F]{6}$', color):
+                    member.color = color
+                else:
+                    return jsonify({"success": False, "error": "Color must be #RRGGBB hex format"}), 400
+
+            manager.save_config()
+            return jsonify({"success": True, "message": f"Updated {member.name}"})
+
+        except Exception as exc:
+            logging.exception("Failed to update member")
             return jsonify({"success": False, "error": str(exc)}), 500
 
     @app.delete("/api/admin/members/<member_id>")

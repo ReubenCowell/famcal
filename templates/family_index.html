@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Family Calendar</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="{{ url_for('static', filename='theme.js') }}"></script>
 </head>
 <body>
 <div class="app-shell">
@@ -15,6 +16,7 @@
             <a href="/" class="active">Calendar</a>
             <a href="/admin">Admin</a>
             <a href="/logout" id="logoutLink" style="display:none;">Logout</a>
+            <button class="theme-toggle" title="Toggle theme">&#9684;</button>
         </div>
     </nav>
 
@@ -26,10 +28,25 @@
             <button class="btn btn-icon" id="btnNext" title="Next month">&#9654;</button>
         </div>
         <span class="month-label" id="monthLabel"></span>
-        <div class="view-switcher">
-            <button id="vsMonth" class="active" title="Month view">Month</button>
-            <button id="vsWeek" title="Week view">Week</button>
-            <button id="vsList" title="List view">List</button>
+        <div class="search-bar">
+            <input type="text" id="searchInput" placeholder="Search events...">
+            <span class="search-count" id="searchCount"></span>
+            <button class="btn btn-icon btn-sm" id="btnClearSearch" style="display:none;" title="Clear search">&times;</button>
+        </div>
+        <div class="toolbar-right">
+            <button class="btn btn-icon btn-sm" id="btnRefresh" title="Refresh now">&#8635;</button>
+            <select class="refresh-select" id="refreshSelect" title="Auto-refresh interval">
+                <option value="30">30s</option>
+                <option value="60" selected>1m</option>
+                <option value="300">5m</option>
+                <option value="0">Off</option>
+            </select>
+            <span class="refresh-indicator" id="refreshIndicator"></span>
+            <div class="view-switcher">
+                <button id="vsMonth" class="active" title="Month view">Month</button>
+                <button id="vsWeek" title="Week view">Week</button>
+                <button id="vsList" title="List view">List</button>
+            </div>
         </div>
     </div>
 
@@ -44,6 +61,7 @@
         <code id="feedUrl"></code>
         <button class="btn btn-sm btn-primary" id="btnCopy">Copy</button>
         <span class="copy-feedback" id="copyFeedback">Copied!</span>
+        <button class="btn btn-sm" id="btnDownloadMember" title="Download .ics file">&#11015; Download</button>
     </div>
 
     <!-- Combined feed bar -->
@@ -52,6 +70,7 @@
         <code id="combinedFeedUrl"></code>
         <button class="btn btn-sm btn-primary" id="btnCopyCombined">Copy</button>
         <span class="copy-feedback" id="copyCombinedFeedback">Copied!</span>
+        <button class="btn btn-sm" id="btnDownloadCombined" title="Download combined .ics file">&#11015; Download</button>
     </div>
 
     <!-- Main content: grid + day panel -->
@@ -87,6 +106,17 @@
 <!-- Tooltip -->
 <div class="ev-tooltip" id="tooltip" style="display:none;"></div>
 
+<!-- Event Detail Modal -->
+<div class="event-modal-overlay" id="eventModal">
+    <div class="event-modal">
+        <div class="event-modal-header">
+            <h3 id="modalTitle"></h3>
+            <button class="btn btn-sm" id="btnCloseModal">&times;</button>
+        </div>
+        <div class="event-modal-body" id="modalBody"></div>
+    </div>
+</div>
+
 <script>
 (function() {
     'use strict';
@@ -100,6 +130,15 @@
     let selectedDate = null;
     let currentView = 'month';     // 'month' | 'week' | 'list'
     const MAX_EVENTS_PER_CELL = 3;
+
+    // Search state
+    let searchTerm = '';
+
+    // Auto-refresh state
+    let refreshTimerId = null;
+    let lastEventsHash = '';
+    let lastRefreshTime = null;
+    let displayEvents = []; // flat array for modal references
 
     // ===== DOM refs =====
     const $monthLabel  = document.getElementById('monthLabel');
@@ -118,6 +157,14 @@
     const $dayTitle    = document.getElementById('dayPanelTitle');
     const $dayBody     = document.getElementById('dayPanelBody');
     const $tooltip     = document.getElementById('tooltip');
+    const $searchInput = document.getElementById('searchInput');
+    const $searchCount = document.getElementById('searchCount');
+    const $btnClearSearch = document.getElementById('btnClearSearch');
+    const $refreshIndicator = document.getElementById('refreshIndicator');
+    const $refreshSelect = document.getElementById('refreshSelect');
+    const $eventModal  = document.getElementById('eventModal');
+    const $modalTitle  = document.getElementById('modalTitle');
+    const $modalBody   = document.getElementById('modalBody');
 
     // ===== Init =====
     viewDate = new Date();
@@ -129,15 +176,66 @@
     document.getElementById('btnClosePanel').onclick = () => { selectedDate = null; $dayPanel.classList.add('hidden'); renderGrid(); };
     document.getElementById('btnCopy').onclick = copyFeed;
     document.getElementById('btnCopyCombined').onclick = copyCombinedFeed;
+    document.getElementById('btnDownloadMember').onclick = () => {
+        if (activeMembers.size === 1) {
+            const mid = [...activeMembers][0];
+            window.location.href = '/' + encodeURIComponent(mid) + '/calendar.ics?download=1';
+        }
+    };
+    document.getElementById('btnDownloadCombined').onclick = () => {
+        window.location.href = '/family/calendar.ics?download=1';
+    };
 
     document.getElementById('vsMonth').onclick = () => switchView('month');
     document.getElementById('vsWeek').onclick  = () => switchView('week');
     document.getElementById('vsList').onclick  = () => switchView('list');
 
-    loadMembers();
+    // Search
+    let searchTimer = null;
+    $searchInput.oninput = () => {
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(() => {
+            searchTerm = $searchInput.value.trim();
+            $btnClearSearch.style.display = searchTerm ? '' : 'none';
+            render();
+            updateSearchCount();
+        }, 300);
+    };
+    $btnClearSearch.onclick = () => {
+        $searchInput.value = '';
+        searchTerm = '';
+        $btnClearSearch.style.display = 'none';
+        $searchCount.textContent = '';
+        render();
+    };
 
-    // Auto-refresh every 60s
-    setInterval(() => { if (activeMembers.size > 0) fetchEvents(); }, 60000);
+    // Refresh controls
+    document.getElementById('btnRefresh').onclick = () => {
+        const btn = document.getElementById('btnRefresh');
+        btn.classList.add('btn-refresh-spin');
+        setTimeout(() => btn.classList.remove('btn-refresh-spin'), 600);
+        fetchEvents(false);
+    };
+    $refreshSelect.value = localStorage.getItem('famcal-refresh-interval') || '60';
+    $refreshSelect.onchange = () => {
+        localStorage.setItem('famcal-refresh-interval', $refreshSelect.value);
+        setupAutoRefresh();
+    };
+
+    // Modal close handlers
+    document.getElementById('btnCloseModal').onclick = closeEventModal;
+    $eventModal.onclick = (e) => { if (e.target === $eventModal) closeEventModal(); };
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeEventModal(); });
+
+    loadMembers();
+    setupAutoRefresh();
+
+    // Pause/resume auto-refresh on visibility change
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && activeMembers.size > 0) {
+            fetchEvents(true);
+        }
+    });
 
     // ===== Functions =====
 
@@ -243,7 +341,7 @@
         }
     }
 
-    async function fetchEvents() {
+    async function fetchEvents(isAutoRefresh) {
         if (activeMembers.size === 0) { events = []; render(); return; }
         let gridStart, gridEnd;
         if (currentView === 'week') {
@@ -268,11 +366,26 @@
         try {
             const res = await fetch(`/api/events?start=${startISO}&end=${endISO}&member_ids=${encodeURIComponent(ids)}`);
             const data = await res.json();
-            events = data.events || [];
+            const newEvents = data.events || [];
+            const newHash = JSON.stringify(newEvents);
+
+            if (isAutoRefresh && newHash === lastEventsHash) {
+                lastRefreshTime = new Date();
+                updateRefreshTime();
+                return; // no change
+            }
+
+            lastEventsHash = newHash;
+            events = newEvents;
+            lastRefreshTime = new Date();
+            updateRefreshTime();
+            render();
+
+            if (isAutoRefresh) showRefreshUpdated();
         } catch (e) {
             events = [];
+            render();
         }
-        render();
     }
 
     function navigatePrev() {
@@ -292,6 +405,7 @@
     }
 
     function render() {
+        displayEvents = [];
         if (currentView === 'month') {
             renderGrid();
         } else if (currentView === 'week') {
@@ -299,6 +413,9 @@
         }
         renderList();
         if (selectedDate) renderDayPanel();
+
+        // Set print title
+        $monthWrap.setAttribute('data-print-title', $monthLabel.textContent || '');
     }
 
     // ===== Month Grid =====
@@ -309,71 +426,147 @@
         const today = new Date();
         const todayStr = dateToISO(today);
 
-        // Build day map
-        const dayMap = buildDayMap(events);
+        const filtered = getFilteredEvents();
+        const dayMap = buildDayMap(filtered);
+
+        // Collect weeks
+        const weeks = [];
+        const cursor = new Date(first);
+        cursor.setDate(cursor.getDate() - cursor.getDay());
+        let currentWeek = [];
+        while (cursor <= last || cursor.getDay() !== 0) {
+            currentWeek.push(new Date(cursor));
+            if (currentWeek.length === 7) {
+                weeks.push(currentWeek);
+                currentWeek = [];
+            }
+            cursor.setDate(cursor.getDate() + 1);
+        }
+
+        // Identify multi-day all-day events
+        const multiDaySet = new Set();
+        filtered.forEach(ev => {
+            if (!ev.all_day || !ev.end || !activeMembers.has(ev.member_id)) return;
+            const startDate = ev.start.substring(0, 10);
+            const endDate = ev.end.substring(0, 10);
+            if (startDate < endDate) multiDaySet.add(ev);
+        });
 
         let html = '';
         const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
         days.forEach(d => { html += `<div class="day-header">${d}</div>`; });
 
-        // Grid start
-        const cursor = new Date(first);
-        cursor.setDate(cursor.getDate() - cursor.getDay());
+        weeks.forEach(weekDays => {
+            const weekStartISO = dateToISO(weekDays[0]);
+            const weekEndDate = new Date(weekDays[6]);
+            weekEndDate.setDate(weekEndDate.getDate() + 1);
+            const weekEndISO = dateToISO(weekEndDate);
 
-        while (cursor <= last || cursor.getDay() !== 0) {
-            const iso = dateToISO(cursor);
-            const inMonth = cursor.getMonth() === m;
-            const isToday = iso === todayStr;
-            const isSel = selectedDate === iso;
-            let cls = 'day-cell';
-            if (!inMonth) cls += ' outside';
-            if (isToday) cls += ' today';
-            if (isSel) cls += ' selected';
-
-            html += `<div class="${cls}" data-date="${iso}">`;
-            html += `<div class="day-number">${cursor.getDate()}</div>`;
-            html += '<div class="day-events">';
-
-            const dayEvts = dayMap[iso] || [];
-            const shown = dayEvts.slice(0, MAX_EVENTS_PER_CELL);
-            const extra = dayEvts.length - MAX_EVENTS_PER_CELL;
-
-            shown.forEach((ev, idx) => {
-                const color = ev.member_color || '#0078d4';
-                const availCls = 'availability-' + ev.availability;
-                const allDayCls = ev.all_day ? ' all-day' : '';
-                const timePrefix = ev.all_day ? '' : formatShortTime(ev.start) + ' ';
-                html += `<div class="day-event${allDayCls} ${availCls}" ` +
-                        `style="background:${esc(color)}" ` +
-                        `data-eidx="${idx}" data-date="${iso}" ` +
-                        `title="${esc(ev.summary)}">${esc(timePrefix + ev.summary)}</div>`;
+            // Find spanning events for this week
+            const weekSpanners = [];
+            multiDaySet.forEach(ev => {
+                const evStart = ev.start.substring(0, 10);
+                const evEnd = ev.end.substring(0, 10);
+                if (evStart < weekEndISO && evEnd > weekStartISO) {
+                    let startCol = 1, endCol = 8;
+                    for (let i = 0; i < 7; i++) {
+                        const dayISO = dateToISO(weekDays[i]);
+                        if (dayISO === evStart) startCol = i + 1;
+                        if (dayISO === evEnd) endCol = i + 1;
+                    }
+                    if (evStart < weekStartISO) startCol = 1;
+                    if (evEnd >= weekEndISO) endCol = 8;
+                    weekSpanners.push({ ev, startCol, endCol });
+                }
             });
-            if (extra > 0) {
-                html += `<div class="more-events" data-date="${iso}">+${extra} more</div>`;
+
+            // Allocate lanes (greedy, longest first)
+            const lanes = [];
+            weekSpanners.sort((a, b) => (b.endCol - b.startCol) - (a.endCol - a.startCol) || a.startCol - b.startCol);
+            weekSpanners.forEach(sp => {
+                let placed = false;
+                for (let i = 0; i < lanes.length; i++) {
+                    const conflicts = lanes[i].some(ex => sp.startCol < ex.endCol && sp.endCol > ex.startCol);
+                    if (!conflicts) { lanes[i].push(sp); sp.lane = i; placed = true; break; }
+                }
+                if (!placed) { sp.lane = lanes.length; lanes.push([sp]); }
+            });
+
+            // Render span row if needed
+            if (weekSpanners.length > 0) {
+                html += '<div class="span-row"><div class="span-row-inner">';
+                weekSpanners.forEach(sp => {
+                    const color = sp.ev.member_color || '#0078d4';
+                    const availCls = 'availability-' + sp.ev.availability;
+                    const evIdx = displayEvents.length;
+                    displayEvents.push(sp.ev);
+                    html += `<div class="span-event ${availCls}" ` +
+                        `style="grid-column:${sp.startCol}/${sp.endCol};grid-row:${sp.lane + 1};background:${esc(color)}" ` +
+                        `data-ev-idx="${evIdx}" ` +
+                        `title="${esc(sp.ev.summary)}">${esc(sp.ev.summary)}</div>`;
+                });
+                html += '</div></div>';
             }
-            html += '</div></div>';
-            cursor.setDate(cursor.getDate() + 1);
-        }
+
+            // Render 7 day cells
+            weekDays.forEach((day, dayIdx) => {
+                const iso = dateToISO(day);
+                const inMonth = day.getMonth() === m;
+                const isToday = iso === todayStr;
+                const isSel = selectedDate === iso;
+                let cls = 'day-cell';
+                if (!inMonth) cls += ' outside';
+                if (isToday) cls += ' today';
+                if (isSel) cls += ' selected';
+                if (dayIdx === 6) cls += ' last-in-row';
+
+                html += `<div class="${cls}" data-date="${iso}">`;
+                html += `<div class="day-number">${day.getDate()}</div>`;
+                html += '<div class="day-events">';
+
+                // Exclude multi-day spanners from day cells
+                const dayEvts = (dayMap[iso] || []).filter(ev => !multiDaySet.has(ev));
+                const shown = dayEvts.slice(0, MAX_EVENTS_PER_CELL);
+                const extra = dayEvts.length - MAX_EVENTS_PER_CELL;
+
+                shown.forEach(ev => {
+                    const color = ev.member_color || '#0078d4';
+                    const availCls = 'availability-' + ev.availability;
+                    const allDayCls = ev.all_day ? ' all-day' : '';
+                    const timePrefix = ev.all_day ? '' : formatShortTime(ev.start) + ' ';
+                    const evIdx = displayEvents.length;
+                    displayEvents.push(ev);
+                    html += `<div class="day-event${allDayCls} ${availCls}" ` +
+                            `style="background:${esc(color)}" ` +
+                            `data-ev-idx="${evIdx}" ` +
+                            `title="${esc(ev.summary)}">${esc(timePrefix + ev.summary)}</div>`;
+                });
+                if (extra > 0) {
+                    html += `<div class="more-events" data-date="${iso}">+${extra} more</div>`;
+                }
+                html += '</div></div>';
+            });
+        });
 
         $monthGrid.innerHTML = html;
 
         // Bind day cell clicks
         $monthGrid.querySelectorAll('.day-cell').forEach(el => {
             el.onclick = (e) => {
-                // Don't open panel if clicking an event chip
-                if (e.target.classList.contains('day-event')) return;
+                if (e.target.classList.contains('day-event') || e.target.classList.contains('span-event')) return;
                 selectDay(el.dataset.date);
             };
         });
-        // Bind more-events clicks
         $monthGrid.querySelectorAll('.more-events').forEach(el => {
             el.onclick = () => selectDay(el.dataset.date);
         });
-        // Event chip hover tooltip
-        $monthGrid.querySelectorAll('.day-event').forEach(el => {
-            el.onmouseenter = (e) => showTooltip(e, el.dataset.date, parseInt(el.dataset.eidx));
-            el.onmouseleave = hideTooltip;
-            el.onclick = (e) => { e.stopPropagation(); selectDay(el.dataset.date); };
+        // Event chip + spanning bar clicks → open modal
+        $monthGrid.querySelectorAll('.day-event, .span-event').forEach(el => {
+            el.onclick = (e) => {
+                e.stopPropagation();
+                const idx = parseInt(el.dataset.evIdx);
+                if (!isNaN(idx) && displayEvents[idx]) openEventModal(displayEvents[idx]);
+            };
         });
     }
 
@@ -388,26 +581,35 @@
         if (!selectedDate) return;
         const d = new Date(selectedDate + 'T00:00:00');
         $dayTitle.textContent = d.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
-        const dayMap = buildDayMap(events);
+        const filtered = getFilteredEvents();
+        const dayMap = buildDayMap(filtered);
         const dayEvts = dayMap[selectedDate] || [];
         if (dayEvts.length === 0) {
             $dayBody.innerHTML = '<div class="empty-state"><p>No events</p></div>';
             return;
         }
         $dayBody.innerHTML = dayEvts.map(ev => eventCardHTML(ev)).join('');
+        // Bind event card clicks to modal
+        $dayBody.querySelectorAll('.event-card[data-ev-idx]').forEach(el => {
+            el.style.cursor = 'pointer';
+            el.onclick = () => {
+                const idx = parseInt(el.dataset.evIdx);
+                if (!isNaN(idx) && displayEvents[idx]) openEventModal(displayEvents[idx]);
+            };
+        });
     }
 
     // ===== List View =====
     function renderList() {
-        if (events.length === 0) {
+        const filtered = getFilteredEvents();
+        if (filtered.length === 0) {
             $listView.innerHTML = '<div class="empty-state"><p class="big">No events in this range</p></div>';
             return;
         }
         // Group by date
         const groups = {};
-        events.forEach(ev => {
+        filtered.forEach(ev => {
             if (!ev.start) return;
-            // Only include events for active members
             if (!activeMembers.has(ev.member_id)) return;
             const d = ev.start.substring(0, 10);
             if (!groups[d]) groups[d] = [];
@@ -421,6 +623,14 @@
             groups[dateStr].forEach(ev => { html += eventCardHTML(ev); });
         });
         $listView.innerHTML = html;
+        // Bind event card clicks to modal
+        $listView.querySelectorAll('.event-card[data-ev-idx]').forEach(el => {
+            el.style.cursor = 'pointer';
+            el.onclick = () => {
+                const idx = parseInt(el.dataset.evIdx);
+                if (!isNaN(idx) && displayEvents[idx]) openEventModal(displayEvents[idx]);
+            };
+        });
     }
 
     // ===== Helpers =====
@@ -464,17 +674,19 @@
     }
 
     function eventCardHTML(ev) {
+        const evIdx = displayEvents.length;
+        displayEvents.push(ev);
         const color = ev.member_color || '#0078d4';
         const timeStr = ev.all_day ? 'All day' : formatTimeRange(ev.start, ev.end);
         const tentCls = ev.availability === 'tentative' ? ' avail-card-tentative' : '';
-        let html = `<div class="event-card${tentCls}" style="border-left-color:${esc(color)}">`;
+        let html = `<div class="event-card${tentCls}" style="border-left-color:${esc(color)}" data-ev-idx="${evIdx}">`;
         html += `<div class="ev-time">${esc(timeStr)} <span class="avail-badge avail-${ev.availability}">${esc(ev.availability)}</span></div>`;
-        html += `<div class="ev-title"><span class="member-dot" style="background:${esc(color)}"></span>${esc(ev.summary)}</div>`;
+        html += `<div class="ev-title"><span class="member-dot" style="background:${esc(color)}"></span>${escHL(ev.summary)}</div>`;
         if (ev.location && ev.location !== 'None' && ev.location !== '') {
-            html += `<div class="ev-meta">&#128205; ${esc(ev.location)}</div>`;
+            html += `<div class="ev-meta">&#128205; ${escHL(ev.location)}</div>`;
         }
         if (ev.description && ev.description !== 'None' && ev.description !== '') {
-            html += `<div class="ev-meta">${esc(ev.description.substring(0, 150))}</div>`;
+            html += `<div class="ev-meta">${escHL(ev.description.substring(0, 150))}</div>`;
         }
         if (members.length > 1) {
             html += `<div class="ev-meta" style="margin-top:4px;"><span class="member-dot" style="background:${esc(color)};vertical-align:middle;"></span> ${esc(ev.member_name)}</div>`;
@@ -513,15 +725,14 @@
     function renderWeekGrid() {
         const today = new Date();
         const todayStr = dateToISO(today);
-        // Get the start of the week (Sunday)
         const weekStart = new Date(viewDate);
         weekStart.setDate(weekStart.getDate() - weekStart.getDay());
-        const dayMap = buildDayMap(events);
+        const filtered = getFilteredEvents();
+        const dayMap = buildDayMap(filtered);
 
         const hours = [];
         for (let h = 0; h < 24; h++) hours.push(h);
 
-        // Header row
         let html = '<div class="week-header-row">';
         html += '<div class="week-time-gutter week-header-cell"></div>';
         for (let d = 0; d < 7; d++) {
@@ -549,7 +760,9 @@
             html += '<div class="week-allday-cell">';
             dayEvts.forEach(ev => {
                 const color = ev.member_color || '#0078d4';
-                html += `<div class="week-event week-event-allday${ev.availability === 'tentative' ? ' week-event-tentative' : ''}" style="background:${esc(color)}" title="${esc(ev.summary)}">${esc(ev.summary)}</div>`;
+                const evIdx = displayEvents.length;
+                displayEvents.push(ev);
+                html += `<div class="week-event week-event-allday${ev.availability === 'tentative' ? ' week-event-tentative' : ''}" style="background:${esc(color)}" data-ev-idx="${evIdx}" title="${esc(ev.summary)}">${esc(ev.summary)}</div>`;
             });
             html += '</div>';
         }
@@ -575,9 +788,9 @@
                 dayEvts.forEach(ev => {
                     const color = ev.member_color || '#0078d4';
                     const time = formatShortTime(ev.start);
-                    let title = esc(time + ' ' + ev.summary);
-                    if (ev.location && ev.location !== 'None' && ev.location !== '') title += '\n📍 ' + esc(ev.location);
-                    html += `<div class="week-event${ev.availability === 'tentative' ? ' week-event-tentative' : ''}" style="background:${esc(color)}" title="${esc(ev.summary)}">`;
+                    const evIdx = displayEvents.length;
+                    displayEvents.push(ev);
+                    html += `<div class="week-event${ev.availability === 'tentative' ? ' week-event-tentative' : ''}" style="background:${esc(color)}" data-ev-idx="${evIdx}" title="${esc(ev.summary)}">`;
                     html += `<span class="week-ev-time">${esc(time)}</span> ${esc(ev.summary)}`;
                     if (ev.location && ev.location !== 'None' && ev.location !== '') {
                         html += `<span class="week-ev-loc">&#128205; ${esc(ev.location)}</span>`;
@@ -594,7 +807,18 @@
 
         // Bind week cell clicks
         $weekGrid.querySelectorAll('.week-cell').forEach(el => {
-            el.onclick = () => selectDay(el.dataset.date);
+            el.onclick = (e) => {
+                if (e.target.classList.contains('week-event')) return;
+                selectDay(el.dataset.date);
+            };
+        });
+        // Week event clicks → open modal
+        $weekGrid.querySelectorAll('.week-event').forEach(el => {
+            el.onclick = (e) => {
+                e.stopPropagation();
+                const idx = parseInt(el.dataset.evIdx);
+                if (!isNaN(idx) && displayEvents[idx]) openEventModal(displayEvents[idx]);
+            };
         });
     }
 
@@ -642,6 +866,100 @@
         const d = document.createElement('div');
         d.textContent = s;
         return d.innerHTML;
+    }
+
+    // ===== Search/Filter =====
+    function getFilteredEvents() {
+        if (!searchTerm) return events;
+        const term = searchTerm.toLowerCase();
+        return events.filter(ev =>
+            (ev.summary && ev.summary.toLowerCase().includes(term)) ||
+            (ev.location && ev.location.toLowerCase().includes(term)) ||
+            (ev.description && ev.description.toLowerCase().includes(term))
+        );
+    }
+
+    function escRegExp(s) {
+        return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+
+    function escHL(s) {
+        if (!s) return '';
+        let result = esc(s);
+        if (searchTerm) {
+            const regex = new RegExp('(' + escRegExp(esc(searchTerm)) + ')', 'gi');
+            result = result.replace(regex, '<mark>$1</mark>');
+        }
+        return result;
+    }
+
+    function updateSearchCount() {
+        if (!searchTerm) { $searchCount.textContent = ''; return; }
+        const count = getFilteredEvents().length;
+        $searchCount.textContent = count + ' found';
+    }
+
+    // ===== Event Modal =====
+    function openEventModal(ev) {
+        hideTooltip();
+        $modalTitle.textContent = ev.summary || 'Untitled';
+        let html = '';
+
+        // Date/time
+        const timeStr = ev.all_day ? 'All day' : formatTimeRange(ev.start, ev.end);
+        let dateStr = '';
+        if (ev.start) {
+            const startD = new Date(ev.start.length <= 10 ? ev.start + 'T00:00:00' : ev.start);
+            dateStr = startD.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+        }
+        html += `<div class="modal-row"><span class="modal-icon">&#128197;</span><div class="modal-value"><div class="modal-label">Date & Time</div>${esc(dateStr)}<br>${esc(timeStr)}</div></div>`;
+
+        // Availability
+        html += `<div class="modal-row"><span class="modal-icon">&#9201;</span><div class="modal-value"><div class="modal-label">Availability</div><span class="avail-badge avail-${ev.availability}">${esc(ev.availability)}</span></div></div>`;
+
+        // Location
+        if (ev.location && ev.location !== 'None' && ev.location !== '') {
+            html += `<div class="modal-row"><span class="modal-icon">&#128205;</span><div class="modal-value"><div class="modal-label">Location</div>${esc(ev.location)}</div></div>`;
+        }
+
+        // Description
+        if (ev.description && ev.description !== 'None' && ev.description !== '') {
+            html += `<div class="modal-row"><span class="modal-icon">&#128221;</span><div class="modal-value"><div class="modal-label">Description</div>${esc(ev.description)}</div></div>`;
+        }
+
+        // Member
+        html += `<div class="modal-row"><span class="modal-icon">&#128100;</span><div class="modal-value"><div class="modal-label">Member</div><div class="modal-member"><span class="member-dot" style="background:${esc(ev.member_color || '#0078d4')}"></span>${esc(ev.member_name)}</div></div></div>`;
+
+        $modalBody.innerHTML = html;
+        $eventModal.classList.add('active');
+    }
+
+    function closeEventModal() {
+        $eventModal.classList.remove('active');
+    }
+
+    // ===== Auto-Refresh =====
+    function setupAutoRefresh() {
+        if (refreshTimerId) clearInterval(refreshTimerId);
+        const seconds = parseInt(localStorage.getItem('famcal-refresh-interval') || '60');
+        if (seconds <= 0) return;
+        refreshTimerId = setInterval(() => {
+            if (document.visibilityState === 'hidden') return;
+            if (activeMembers.size > 0) fetchEvents(true);
+        }, seconds * 1000);
+    }
+
+    function updateRefreshTime() {
+        if (!lastRefreshTime) return;
+        const timeStr = lastRefreshTime.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+        $refreshIndicator.textContent = 'Updated ' + timeStr;
+        $refreshIndicator.className = 'refresh-indicator';
+    }
+
+    function showRefreshUpdated() {
+        $refreshIndicator.textContent = 'Updated!';
+        $refreshIndicator.className = 'refresh-indicator refresh-updated';
+        setTimeout(() => updateRefreshTime(), 3000);
     }
 })();
 </script>

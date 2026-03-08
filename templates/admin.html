@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Family Calendar &ndash; Admin</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="{{ url_for('static', filename='theme.js') }}"></script>
 </head>
 <body>
 <div class="app-shell">
@@ -15,6 +16,7 @@
             <a href="/">Calendar</a>
             <a href="/admin" class="active">Admin</a>
             <a href="/logout" id="logoutLink" style="display:none;">Logout</a>
+            <button class="theme-toggle" title="Toggle theme">&#9684;</button>
         </div>
     </nav>
 
@@ -222,9 +224,22 @@
             html += `<div class="member-card-header">`;
             html += `<div class="member-title"><span class="color-chip" style="background:${esc(m.color)}"></span><div><h2>${esc(m.name)}</h2><div class="feed-link">${esc(m.feed_url)}</div></div></div>`;
             html += `<div style="display:flex;gap:8px;align-items:center;">`;
+            html += `<button class="btn btn-sm" onclick="downloadMemberICS('${esc(m.id)}','${esc(m.name)}')" title="Download .ics file">&#11015; Download</button>`;
             html += `<button class="btn btn-sm" onclick="refreshMember('${esc(m.id)}')">&#8635; Refresh</button>`;
             html += `<button class="btn btn-danger btn-sm" onclick="deleteMember('${esc(m.id)}','${esc(m.name)}')">Delete</button>`;
             html += `</div></div>`;
+
+            // Color picker row
+            const presetColors = ['#0078d4','#e74856','#00cc6a','#f7630c','#886ce4','#00b7c3','#ca5010','#e3008c','#498205','#bf0077','#008272','#4a154b'];
+            html += `<div style="padding:var(--sp-3) var(--sp-5);border-bottom:1px solid var(--border);">`;
+            html += `<div class="color-picker-group">`;
+            html += `<input type="color" value="${esc(m.color)}" onchange="updateMemberColor('${esc(m.id)}',this.value)" title="Pick custom color">`;
+            html += `<div class="color-swatches">`;
+            presetColors.forEach(c => {
+                const activeCls = c === m.color ? ' active' : '';
+                html += `<span class="color-swatch${activeCls}" style="background:${c}" onclick="updateMemberColor('${esc(m.id)}','${c}')" title="${c}"></span>`;
+            });
+            html += `</div></div></div>`;
 
             // Status row
             html += `<div class="status-row">`;
@@ -383,6 +398,23 @@
     function openModal(id) { document.getElementById(id).classList.add('active'); }
     function closeModal(id) { document.getElementById(id).classList.remove('active'); }
     window.closeModal = closeModal;
+
+    window.updateMemberColor = async function(mid, color) {
+        try {
+            const res = await fetch(`/api/admin/members/${encodeURIComponent(mid)}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ color: color })
+            });
+            const r = await res.json();
+            if (r.success) { toast('Color updated', 'success'); loadData(); }
+            else toast(r.error, 'error');
+        } catch { toast('Failed to update color', 'error'); }
+    };
+
+    window.downloadMemberICS = function(mid) {
+        window.location.href = '/' + encodeURIComponent(mid) + '/calendar.ics?download=1';
+    };
 
     function toast(msg, type) {
         const box = document.getElementById('alertBox');
