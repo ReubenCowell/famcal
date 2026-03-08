@@ -222,7 +222,7 @@
     };
 
     async function fetchStatus() {
-        '''Fetch just the status without reloading member list to avoid flickering.'''
+        // Fetch just the status without reloading member list to avoid flickering
         try {
             const res = await fetch('/api/status');
             statuses = await res.json() || {};
