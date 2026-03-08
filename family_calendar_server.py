@@ -62,6 +62,7 @@ class CalendarSource:
     name: str
     show_details: bool  # If False, only show busy_text but preserve event's TRANSP/STATUS
     busy_text: str = "Busy"  # Custom text shown when show_details is False
+    show_location: bool = False  # If True, preserve location even when details are hidden
 
 
 @dataclass
@@ -128,7 +129,8 @@ class FamilyCalendarManager:
                     url=cal.get("url", ""),
                     name=cal.get("name", "Untitled"),
                     show_details=cal.get("show_details", True),
-                    busy_text=cal.get("busy_text", "Busy")
+                    busy_text=cal.get("busy_text", "Busy"),
+                    show_location=cal.get("show_location", False)
                 )
                 for cal in member_data.get("calendars", [])
             ]
@@ -293,7 +295,11 @@ def apply_privacy_to_event(event: Event, calendar_source: CalendarSource) -> Eve
     private_event["SUMMARY"] = calendar_source.busy_text or "Busy"
     private_event["CLASS"] = "PRIVATE"
     
-    # Don't copy description or location (privacy)
+    # Optionally preserve location even when details are hidden
+    if calendar_source.show_location and "LOCATION" in event:
+        location = str(event.get("LOCATION", "") or "")
+        if location:
+            private_event["LOCATION"] = location
     
     return private_event
 
@@ -879,7 +885,8 @@ def create_app(manager: FamilyCalendarManager, fetch_timeout: int) -> Flask:
                 return jsonify({"success": False, "error": "URL must start with http:// or https://"}), 400
 
             member = manager.members[member_id]
-            member.calendars.append(CalendarSource(url=url, name=name, show_details=show_details, busy_text=busy_text))
+            show_location = data.get("show_location", False)
+            member.calendars.append(CalendarSource(url=url, name=name, show_details=show_details, busy_text=busy_text, show_location=show_location))
             manager.statuses[member_id].configured_sources = len(member.calendars)
             
             manager.save_config()
@@ -949,6 +956,9 @@ def create_app(manager: FamilyCalendarManager, fetch_timeout: int) -> Flask:
             
             if "busy_text" in data:
                 calendar.busy_text = data["busy_text"].strip() or "Busy"
+            
+            if "show_location" in data:
+                calendar.show_location = bool(data["show_location"])
             
             manager.save_config()
             
