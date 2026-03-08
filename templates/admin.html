@@ -14,6 +14,7 @@
         <div class="nav-links">
             <a href="/">Calendar</a>
             <a href="/admin" class="active">Admin</a>
+            <a href="/logout" id="logoutLink" style="display:none;">Logout</a>
         </div>
     </nav>
 
@@ -27,6 +28,24 @@
         </div>
 
         <div id="alertBox" class="alert-toast"></div>
+
+        <!-- Password Section -->
+        <div class="member-card" style="margin-bottom:var(--sp-6);">
+            <div class="member-card-header">
+                <div class="member-title"><div><h2>&#128274; Password Protection</h2></div></div>
+            </div>
+            <div class="member-card-body">
+                <p id="pwStatus" style="margin-bottom:var(--sp-3);font-size:.875rem;color:var(--text-secondary);">Checking...</p>
+                <div style="display:flex;gap:var(--sp-2);align-items:flex-end;flex-wrap:wrap;">
+                    <div class="form-group" style="margin-bottom:0;flex:1;min-width:200px;">
+                        <label for="fPassword">New Password</label>
+                        <input type="password" id="fPassword" placeholder="Enter new password" style="width:100%;padding:var(--sp-2) var(--sp-3);border:1px solid var(--border-strong);border-radius:var(--radius-sm);font-size:.875rem;">
+                    </div>
+                    <button class="btn btn-primary" onclick="setPassword()">Set Password</button>
+                    <button class="btn btn-danger" id="btnRemovePw" onclick="removePassword()" style="display:none;">Remove Password</button>
+                </div>
+            </div>
+        </div>
 
         <div id="membersContainer">
             <div class="empty-state" id="adminEmpty">
@@ -113,6 +132,61 @@
     });
 
     loadData();
+    checkPasswordStatus();
+
+    async function checkPasswordStatus() {
+        try {
+            // Check if we can reach the login page (it redirects to / if no password)
+            const res = await fetch('/login', { redirect: 'manual' });
+            // If there's a password set, show the status
+            if (res.type === 'opaqueredirect' || res.redirected) {
+                document.getElementById('pwStatus').textContent = 'No password set. The app is publicly accessible.';
+                document.getElementById('btnRemovePw').style.display = 'none';
+                document.getElementById('logoutLink').style.display = 'none';
+            } else {
+                const html = await res.text();
+                if (html.includes('Enter the family password')) {
+                    document.getElementById('pwStatus').innerHTML = '&#9989; Password is set. The app is protected.';
+                    document.getElementById('btnRemovePw').style.display = '';
+                    document.getElementById('logoutLink').style.display = '';
+                } else {
+                    document.getElementById('pwStatus').textContent = 'No password set. The app is publicly accessible.';
+                    document.getElementById('btnRemovePw').style.display = 'none';
+                    document.getElementById('logoutLink').style.display = 'none';
+                }
+            }
+        } catch {
+            document.getElementById('pwStatus').textContent = 'No password set. The app is publicly accessible.';
+        }
+    }
+
+    window.setPassword = async function() {
+        const pw = document.getElementById('fPassword').value;
+        if (!pw || pw.length < 4) { toast('Password must be at least 4 characters', 'error'); return; }
+        try {
+            const res = await fetch('/api/admin/set-password', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ password: pw })
+            });
+            const r = await res.json();
+            if (r.success) {
+                toast('Password set!', 'success');
+                document.getElementById('fPassword').value = '';
+                checkPasswordStatus();
+            } else toast(r.error, 'error');
+        } catch { toast('Failed to set password', 'error'); }
+    };
+
+    window.removePassword = async function() {
+        if (!confirm('Remove password? The app will be publicly accessible.')) return;
+        try {
+            const res = await fetch('/api/admin/remove-password', { method: 'POST' });
+            const r = await res.json();
+            if (r.success) { toast('Password removed', 'success'); checkPasswordStatus(); }
+            else toast(r.error, 'error');
+        } catch { toast('Failed to remove password', 'error'); }
+    };
 
     async function loadData() {
         try {

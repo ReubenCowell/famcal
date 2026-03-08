@@ -28,9 +28,12 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+import secrets
+
 import requests
-from flask import Flask, Response, jsonify, render_template, request
+from flask import Flask, Response, jsonify, redirect, render_template, request, session, url_for
 from icalendar import Calendar, Event
+from werkzeug.security import check_password_hash, generate_password_hash
 
 DEFAULT_CONFIG_FILE = "family_config.json"
 DEFAULT_REFRESH_SECONDS = 3600
@@ -76,6 +79,7 @@ class ServerConfig:
     host: str = "0.0.0.0"
     port: int = 8000
     domain: str | None = None
+    password_hash: str = ""
 
 
 @dataclass
@@ -142,7 +146,8 @@ class FamilyCalendarManager:
             refresh_interval_seconds=server_settings.get("refresh_interval_seconds", 3600),
             host=server_settings.get("host", "0.0.0.0"),
             port=server_settings.get("port", 8000),
-            domain=server_settings.get("domain")
+            domain=server_settings.get("domain"),
+            password_hash=server_settings.get("password_hash", "")
         )
 
         logging.info("Loaded config for %d family members", len(self.members))
@@ -169,7 +174,8 @@ class FamilyCalendarManager:
                 "refresh_interval_seconds": self.server_config.refresh_interval_seconds,
                 "host": self.server_config.host,
                 "port": self.server_config.port,
-                "domain": self.server_config.domain or ""
+                "domain": self.server_config.domain or "",
+                "password_hash": self.server_config.password_hash
             }
         }
         
@@ -494,8 +500,8 @@ def _extract_events(
             "start": _normalize_dt(dtstart),
             "end": _normalize_dt(dtend),
             "all_day": all_day,
-            "location": str(event.get("LOCATION", "")),
-            "description": str(event.get("DESCRIPTION", "")),
+            "location": str(event.get("LOCATION", "") or ""),
+            "description": str(event.get("DESCRIPTION", "") or ""),
             "status": status_val,
             "availability": availability,
             "member_id": member.id,
@@ -510,6 +516,62 @@ def create_app(manager: FamilyCalendarManager, fetch_timeout: int) -> Flask:
     """Create Flask application."""
     app = Flask(__name__)
     app.json.sort_keys = False
+    app.secret_key = os.getenv("SECRET_KEY", secrets.token_hex(32))
+
+    # ===== Authentication =====
+    PUBLIC_PATHS = {"/login", "/static"}
+
+    @app.before_request
+    def require_login():
+        """Require password for all routes except login, static files, and ICS feeds."""
+        if not manager.server_config.password_hash:
+            return  # No password set, skip auth
+        path = request.path
+        if path.startswith("/static") or path == "/login":
+            return
+        # Allow ICS feed URLs without auth (for calendar app subscriptions)
+        if path.endswith("/calendar.ics"):
+            return
+        if not session.get("authenticated"):
+            return redirect(url_for("login"))
+
+    @app.route("/login", methods=["GET", "POST"])
+    def login():
+        """Login page with password-only authentication."""
+        if not manager.server_config.password_hash:
+            return redirect("/")
+        if request.method == "POST":
+            password = request.form.get("password", "")
+            if check_password_hash(manager.server_config.password_hash, password):
+                session["authenticated"] = True
+                return redirect("/")
+            return render_template("login.html", error="Incorrect password. Please try again.")
+        return render_template("login.html")
+
+    @app.get("/logout")
+    def logout():
+        """Clear session and redirect to login."""
+        session.clear()
+        return redirect("/login")
+
+    @app.post("/api/admin/set-password")
+    def api_set_password():
+        """Set or update the app password."""
+        data = request.get_json()
+        password = data.get("password", "").strip()
+        if len(password) < 4:
+            return jsonify({"success": False, "error": "Password must be at least 4 characters"}), 400
+        manager.server_config.password_hash = generate_password_hash(password)
+        manager.save_config()
+        session["authenticated"] = True
+        return jsonify({"success": True, "message": "Password updated"})
+
+    @app.post("/api/admin/remove-password")
+    def api_remove_password():
+        """Remove the app password (make it public)."""
+        manager.server_config.password_hash = ""
+        manager.save_config()
+        return jsonify({"success": True, "message": "Password removed"})
 
     @app.get("/")
     def index():

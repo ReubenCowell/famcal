@@ -14,6 +14,7 @@
         <div class="nav-links">
             <a href="/" class="active">Calendar</a>
             <a href="/admin">Admin</a>
+            <a href="/logout" id="logoutLink" style="display:none;">Logout</a>
         </div>
     </nav>
 
@@ -27,6 +28,7 @@
         <span class="month-label" id="monthLabel"></span>
         <div class="view-switcher">
             <button id="vsMonth" class="active" title="Month view">Month</button>
+            <button id="vsWeek" title="Week view">Week</button>
             <button id="vsList" title="List view">List</button>
         </div>
     </div>
@@ -50,6 +52,10 @@
             <!-- Month grid -->
             <div class="month-grid-wrap" id="monthGridWrap">
                 <div class="month-grid" id="monthGrid"></div>
+            </div>
+            <!-- Week view -->
+            <div class="week-grid-wrap" id="weekGridWrap" style="display:none;">
+                <div class="week-grid" id="weekGrid"></div>
             </div>
             <!-- List view -->
             <div class="list-view" id="listView"></div>
@@ -83,13 +89,15 @@
     let events = [];
     let viewDate = new Date();     // 1st of current view month
     let selectedDate = null;
-    let currentView = 'month';     // 'month' | 'list'
+    let currentView = 'month';     // 'month' | 'week' | 'list'
     const MAX_EVENTS_PER_CELL = 3;
 
     // ===== DOM refs =====
     const $monthLabel  = document.getElementById('monthLabel');
     const $monthGrid   = document.getElementById('monthGrid');
     const $monthWrap   = document.getElementById('monthGridWrap');
+    const $weekGrid    = document.getElementById('weekGrid');
+    const $weekWrap    = document.getElementById('weekGridWrap');
     const $listView    = document.getElementById('listView');
     const $memberPills = document.getElementById('memberPills');
     const $feedBar     = document.getElementById('feedBar');
@@ -104,13 +112,14 @@
     viewDate = new Date();
     viewDate.setDate(1);
 
-    document.getElementById('btnPrev').onclick = () => { viewDate.setMonth(viewDate.getMonth() - 1); refresh(); };
-    document.getElementById('btnNext').onclick = () => { viewDate.setMonth(viewDate.getMonth() + 1); refresh(); };
-    document.getElementById('btnToday').onclick = () => { viewDate = new Date(); viewDate.setDate(1); refresh(); };
+    document.getElementById('btnPrev').onclick = () => { navigatePrev(); refresh(); };
+    document.getElementById('btnNext').onclick = () => { navigateNext(); refresh(); };
+    document.getElementById('btnToday').onclick = () => { viewDate = new Date(); if (currentView !== 'week') viewDate.setDate(1); refresh(); };
     document.getElementById('btnClosePanel').onclick = () => { selectedDate = null; $dayPanel.classList.add('hidden'); renderGrid(); };
     document.getElementById('btnCopy').onclick = copyFeed;
 
     document.getElementById('vsMonth').onclick = () => switchView('month');
+    document.getElementById('vsWeek').onclick  = () => switchView('week');
     document.getElementById('vsList').onclick  = () => switchView('list');
 
     loadMembers();
@@ -195,20 +204,35 @@
     }
 
     function updateMonthLabel() {
-        $monthLabel.textContent = viewDate.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+        if (currentView === 'week') {
+            const weekStart = new Date(viewDate);
+            weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+            const weekEnd = new Date(weekStart);
+            weekEnd.setDate(weekEnd.getDate() + 6);
+            const opts = { month: 'short', day: 'numeric' };
+            $monthLabel.textContent = weekStart.toLocaleDateString(undefined, opts) + ' \u2013 ' + weekEnd.toLocaleDateString(undefined, { ...opts, year: 'numeric' });
+        } else {
+            $monthLabel.textContent = viewDate.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+        }
     }
 
     async function fetchEvents() {
         if (activeMembers.size === 0) { events = []; render(); return; }
-        // Calculate range for the visible grid (include leading/trailing days)
-        const y = viewDate.getFullYear(), m = viewDate.getMonth();
-        const first = new Date(y, m, 1);
-        const last = new Date(y, m + 1, 0);
-        // Extend to full weeks
-        const gridStart = new Date(first);
-        gridStart.setDate(gridStart.getDate() - gridStart.getDay());
-        const gridEnd = new Date(last);
-        gridEnd.setDate(gridEnd.getDate() + (6 - gridEnd.getDay()) + 1);
+        let gridStart, gridEnd;
+        if (currentView === 'week') {
+            gridStart = new Date(viewDate);
+            gridStart.setDate(gridStart.getDate() - gridStart.getDay());
+            gridEnd = new Date(gridStart);
+            gridEnd.setDate(gridEnd.getDate() + 7);
+        } else {
+            const y = viewDate.getFullYear(), m = viewDate.getMonth();
+            const first = new Date(y, m, 1);
+            const last = new Date(y, m + 1, 0);
+            gridStart = new Date(first);
+            gridStart.setDate(gridStart.getDate() - gridStart.getDay());
+            gridEnd = new Date(last);
+            gridEnd.setDate(gridEnd.getDate() + (6 - gridEnd.getDay()) + 1);
+        }
 
         const startISO = dateToISO(gridStart);
         const endISO = dateToISO(gridEnd);
@@ -224,9 +248,27 @@
         render();
     }
 
+    function navigatePrev() {
+        if (currentView === 'week') {
+            viewDate.setDate(viewDate.getDate() - 7);
+        } else {
+            viewDate.setMonth(viewDate.getMonth() - 1);
+        }
+    }
+
+    function navigateNext() {
+        if (currentView === 'week') {
+            viewDate.setDate(viewDate.getDate() + 7);
+        } else {
+            viewDate.setMonth(viewDate.getMonth() + 1);
+        }
+    }
+
     function render() {
         if (currentView === 'month') {
             renderGrid();
+        } else if (currentView === 'week') {
+            renderWeekGrid();
         }
         renderList();
         if (selectedDate) renderDayPanel();
@@ -397,7 +439,8 @@
     function eventCardHTML(ev) {
         const color = ev.member_color || '#0078d4';
         const timeStr = ev.all_day ? 'All day' : formatTimeRange(ev.start, ev.end);
-        let html = `<div class="event-card" style="border-left-color:${esc(color)}">`;
+        const tentCls = ev.availability === 'tentative' ? ' avail-card-tentative' : '';
+        let html = `<div class="event-card${tentCls}" style="border-left-color:${esc(color)}">`;
         html += `<div class="ev-time">${esc(timeStr)} <span class="avail-badge avail-${ev.availability}">${esc(ev.availability)}</span></div>`;
         html += `<div class="ev-title"><span class="member-dot" style="background:${esc(color)}"></span>${esc(ev.summary)}</div>`;
         if (ev.location && ev.location !== 'None' && ev.location !== '') {
@@ -424,6 +467,9 @@
         if (ev.location && ev.location !== 'None' && ev.location !== '') {
             html += `<div class="tt-loc">&#128205; ${esc(ev.location)}</div>`;
         }
+        if (ev.description && ev.description !== 'None' && ev.description !== '') {
+            html += `<div class="tt-loc">${esc(ev.description.substring(0, 120))}</div>`;
+        }
         if (members.length > 1) {
             html += `<div class="tt-member">${esc(ev.member_name)}</div>`;
         }
@@ -436,12 +482,108 @@
 
     function hideTooltip() { $tooltip.style.display = 'none'; }
 
+    // ===== Week Grid =====
+    function renderWeekGrid() {
+        const today = new Date();
+        const todayStr = dateToISO(today);
+        // Get the start of the week (Sunday)
+        const weekStart = new Date(viewDate);
+        weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+        const dayMap = buildDayMap(events);
+
+        const hours = [];
+        for (let h = 0; h < 24; h++) hours.push(h);
+
+        // Header row
+        let html = '<div class="week-header-row">';
+        html += '<div class="week-time-gutter week-header-cell"></div>';
+        for (let d = 0; d < 7; d++) {
+            const day = new Date(weekStart);
+            day.setDate(day.getDate() + d);
+            const iso = dateToISO(day);
+            const isToday = iso === todayStr;
+            const dayName = day.toLocaleDateString(undefined, { weekday: 'short' });
+            const dayNum = day.getDate();
+            html += `<div class="week-header-cell${isToday ? ' today' : ''}">`;
+            html += `<span class="week-day-name">${dayName}</span>`;
+            html += `<span class="week-day-num${isToday ? ' today-num' : ''}">${dayNum}</span>`;
+            html += '</div>';
+        }
+        html += '</div>';
+
+        // All-day row
+        html += '<div class="week-allday-row">';
+        html += '<div class="week-time-gutter"><span class="week-time-label">All day</span></div>';
+        for (let d = 0; d < 7; d++) {
+            const day = new Date(weekStart);
+            day.setDate(day.getDate() + d);
+            const iso = dateToISO(day);
+            const dayEvts = (dayMap[iso] || []).filter(ev => ev.all_day);
+            html += '<div class="week-allday-cell">';
+            dayEvts.forEach(ev => {
+                const color = ev.member_color || '#0078d4';
+                html += `<div class="week-event week-event-allday${ev.availability === 'tentative' ? ' week-event-tentative' : ''}" style="background:${esc(color)}" title="${esc(ev.summary)}">${esc(ev.summary)}</div>`;
+            });
+            html += '</div>';
+        }
+        html += '</div>';
+
+        // Time grid body
+        html += '<div class="week-body">';
+        for (let h = 0; h < 24; h++) {
+            html += '<div class="week-row">';
+            const label = h === 0 ? '12 AM' : h < 12 ? h + ' AM' : h === 12 ? '12 PM' : (h - 12) + ' PM';
+            html += `<div class="week-time-gutter"><span class="week-time-label">${label}</span></div>`;
+            for (let d = 0; d < 7; d++) {
+                const day = new Date(weekStart);
+                day.setDate(day.getDate() + d);
+                const iso = dateToISO(day);
+                const isToday = iso === todayStr;
+                const dayEvts = (dayMap[iso] || []).filter(ev => {
+                    if (ev.all_day) return false;
+                    const evHour = new Date(ev.start).getHours();
+                    return evHour === h;
+                });
+                html += `<div class="week-cell${isToday ? ' week-cell-today' : ''}" data-date="${iso}">`;
+                dayEvts.forEach(ev => {
+                    const color = ev.member_color || '#0078d4';
+                    const time = formatShortTime(ev.start);
+                    let title = esc(time + ' ' + ev.summary);
+                    if (ev.location && ev.location !== 'None' && ev.location !== '') title += '\n📍 ' + esc(ev.location);
+                    html += `<div class="week-event${ev.availability === 'tentative' ? ' week-event-tentative' : ''}" style="background:${esc(color)}" title="${esc(ev.summary)}">`;
+                    html += `<span class="week-ev-time">${esc(time)}</span> ${esc(ev.summary)}`;
+                    if (ev.location && ev.location !== 'None' && ev.location !== '') {
+                        html += `<span class="week-ev-loc">&#128205; ${esc(ev.location)}</span>`;
+                    }
+                    html += '</div>';
+                });
+                html += '</div>';
+            }
+            html += '</div>';
+        }
+        html += '</div>';
+
+        $weekGrid.innerHTML = html;
+
+        // Bind week cell clicks
+        $weekGrid.querySelectorAll('.week-cell').forEach(el => {
+            el.onclick = () => selectDay(el.dataset.date);
+        });
+    }
+
     function switchView(v) {
         currentView = v;
         document.getElementById('vsMonth').classList.toggle('active', v === 'month');
+        document.getElementById('vsWeek').classList.toggle('active', v === 'week');
         document.getElementById('vsList').classList.toggle('active', v === 'list');
         $monthWrap.classList.toggle('hidden', v !== 'month');
+        $weekWrap.style.display = v === 'week' ? '' : 'none';
         $listView.classList.toggle('active', v === 'list');
+        if (v === 'week') {
+            // When switching to week, set viewDate to current week
+            viewDate = new Date();
+        }
+        refresh();
     }
 
     function dateToISO(d) {
@@ -460,6 +602,13 @@
         if (s && e) return s + ' \u2013 ' + e;
         return s || 'All day';
     }
+
+    // Check if password is set to show/hide logout link
+    fetch('/login').then(r => r.text()).then(html => {
+        if (html.includes('Enter the family password')) {
+            document.getElementById('logoutLink').style.display = '';
+        }
+    }).catch(() => {});
 
     function esc(s) {
         if (!s) return '';
