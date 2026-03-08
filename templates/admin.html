@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Family Calendar &ndash; Admin</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<div class="app-shell">
+    <!-- Top Nav -->
+    <nav class="top-nav">
+        <span class="brand">&#128197; Family Calendar</span>
+        <div class="nav-links">
+            <a href="/">Calendar</a>
+            <a href="/admin" class="active">Admin</a>
+        </div>
+    </nav>
+
+    <div class="admin-container">
+        <div class="admin-header">
+            <h1>Manage Family Calendars</h1>
+            <div class="admin-actions">
+                <button class="btn btn-primary" id="btnAddMember">+ Add Member</button>
+                <button class="btn" id="btnRefreshAll">&#8635; Refresh All</button>
+            </div>
+        </div>
+
+        <div id="alertBox" class="alert-toast"></div>
+
+        <div id="membersContainer">
+            <div class="empty-state" id="adminEmpty">
+                <p class="big">No family members yet</p>
+                <p>Click <strong>+ Add Member</strong> to get started.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Add Member Modal -->
+<div class="modal-overlay" id="modalAddMember">
+    <div class="modal-box">
+        <h2>Add Family Member</h2>
+        <form id="formAddMember">
+            <div class="form-group">
+                <label for="fMemberId">Member ID</label>
+                <input type="text" id="fMemberId" required pattern="[a-z0-9_]+" placeholder="e.g. alex, ben_jr">
+                <small>Lowercase letters, numbers, underscores only</small>
+            </div>
+            <div class="form-group">
+                <label for="fMemberName">Display Name</label>
+                <input type="text" id="fMemberName" required placeholder="e.g. Alex">
+            </div>
+            <div class="form-buttons">
+                <button type="button" class="btn" onclick="closeModal('modalAddMember')">Cancel</button>
+                <button type="submit" class="btn btn-primary">Add Member</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Add Calendar Modal -->
+<div class="modal-overlay" id="modalAddCal">
+    <div class="modal-box">
+        <h2>Add Calendar Source</h2>
+        <form id="formAddCal">
+            <input type="hidden" id="fCalMemberId">
+            <div class="form-group">
+                <label for="fCalName">Calendar Name</label>
+                <input type="text" id="fCalName" required placeholder="e.g. Work Calendar">
+            </div>
+            <div class="form-group">
+                <label for="fCalUrl">ICS URL</label>
+                <input type="url" id="fCalUrl" required placeholder="https://calendar.google.com/...">
+                <small>Public ICS/iCal subscription URL</small>
+            </div>
+            <div class="form-group">
+                <div class="checkbox-row">
+                    <input type="checkbox" id="fCalDetails" checked>
+                    <label for="fCalDetails" style="margin-bottom:0;font-weight:400;">Show event details</label>
+                </div>
+                <small style="margin-left:24px;display:block;">
+                    Uncheck to hide details and show only &ldquo;Busy&rdquo;.
+                    The event&rsquo;s busy/tentative status from the source calendar is always preserved.
+                </small>
+            </div>
+            <div class="form-buttons">
+                <button type="button" class="btn" onclick="closeModal('modalAddCal')">Cancel</button>
+                <button type="submit" class="btn btn-primary">Add Calendar</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+(function() {
+    'use strict';
+
+    let members = [];
+    let statuses = {};
+
+    const $container = document.getElementById('membersContainer');
+    const $empty = document.getElementById('adminEmpty');
+
+    document.getElementById('btnAddMember').onclick = () => openModal('modalAddMember');
+    document.getElementById('btnRefreshAll').onclick = refreshAll;
+    document.getElementById('formAddMember').onsubmit = addMember;
+    document.getElementById('formAddCal').onsubmit = addCalendar;
+
+    // Close modals on overlay click
+    document.querySelectorAll('.modal-overlay').forEach(el => {
+        el.onclick = e => { if (e.target === el) el.classList.remove('active'); };
+    });
+
+    loadData();
+
+    async function loadData() {
+        try {
+            const [mRes, sRes] = await Promise.all([fetch('/api/members'), fetch('/api/status')]);
+            const mData = await mRes.json();
+            const sData = await sRes.json();
+            members = mData.members || [];
+            statuses = sData || {};
+        } catch (e) {
+            members = [];
+            statuses = {};
+        }
+        renderMembers();
+    }
+
+    function renderMembers() {
+        if (members.length === 0) {
+            $empty.style.display = '';
+            // Remove all cards
+            $container.querySelectorAll('.member-card').forEach(el => el.remove());
+            return;
+        }
+        $empty.style.display = 'none';
+
+        let html = '';
+        members.forEach(m => {
+            const st = statuses[m.id] || {};
+            html += `<div class="member-card">`;
+            html += `<div class="member-card-header">`;
+            html += `<div class="member-title"><span class="color-chip" style="background:${esc(m.color)}"></span><div><h2>${esc(m.name)}</h2><div class="feed-link">${esc(m.feed_url)}</div></div></div>`;
+            html += `<div style="display:flex;gap:8px;align-items:center;">`;
+            html += `<button class="btn btn-sm" onclick="refreshMember('${esc(m.id)}')">&#8635; Refresh</button>`;
+            html += `<button class="btn btn-danger btn-sm" onclick="deleteMember('${esc(m.id)}','${esc(m.name)}')">Delete</button>`;
+            html += `</div></div>`;
+
+            // Status row
+            html += `<div class="status-row">`;
+            html += `<span class="stat">Events: <b>${st.merged_events ?? '—'}</b></span>`;
+            html += `<span class="stat">Sources: <b>${st.successful_sources ?? '—'}/${st.configured_sources ?? '—'}</b></span>`;
+            html += `<span class="stat">Updated: <b>${st.last_refresh_utc ? new Date(st.last_refresh_utc).toLocaleString() : 'Never'}</b></span>`;
+            if (st.last_error) {
+                html += `<span class="stat" style="color:var(--busy);">Error: ${esc(st.last_error)}</span>`;
+            }
+            html += `</div>`;
+
+            // Calendar list
+            html += `<div class="member-card-body">`;
+            html += `<div class="section-label"><strong>Calendars (${m.calendars.length})</strong>`;
+            html += `<button class="btn btn-sm btn-primary" onclick="openAddCalModal('${esc(m.id)}')">+ Add Calendar</button></div>`;
+
+            if (m.calendars.length === 0) {
+                html += `<div style="color:var(--text-muted);font-style:italic;padding:12px 0;">No calendars added yet.</div>`;
+            } else {
+                m.calendars.forEach((cal, idx) => {
+                    html += `<div class="cal-row">`;
+                    html += `<div class="cal-info"><span class="cal-name">${esc(cal.name)}</span> `;
+                    html += cal.show_details
+                        ? '<span class="badge badge-details">Details shown</span>'
+                        : '<span class="badge badge-privacy">Privacy mode</span>';
+                    html += `<div class="cal-url" title="${esc(cal.url)}">${cal.has_url ? esc(cal.url) : '<em>No URL</em>'}</div></div>`;
+                    html += `<div class="cal-actions">`;
+                    html += `<button class="btn btn-sm" onclick="togglePrivacy('${esc(m.id)}',${idx},${!cal.show_details})">${cal.show_details ? '&#128274; Hide' : '&#128275; Show'}</button>`;
+                    html += `<button class="btn btn-danger btn-sm" onclick="deleteCal('${esc(m.id)}',${idx},'${esc(cal.name)}')">Delete</button>`;
+                    html += `</div></div>`;
+                });
+            }
+            html += `</div></div>`;
+        });
+        $container.innerHTML = html + $empty.outerHTML;
+        $empty.style.display = 'none';
+    }
+
+    async function addMember(e) {
+        e.preventDefault();
+        const id = document.getElementById('fMemberId').value.trim().toLowerCase();
+        const name = document.getElementById('fMemberName').value.trim();
+        try {
+            const res = await fetch('/api/admin/members', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id, name })
+            });
+            const r = await res.json();
+            if (r.success) { toast(r.message, 'success'); closeModal('modalAddMember'); loadData(); }
+            else toast(r.error, 'error');
+        } catch { toast('Failed to add member', 'error'); }
+    }
+
+    window.deleteMember = async function(id, name) {
+        if (!confirm(`Delete ${name} and all their calendars?`)) return;
+        try {
+            const res = await fetch(`/api/admin/members/${encodeURIComponent(id)}`, { method: 'DELETE' });
+            const r = await res.json();
+            if (r.success) { toast(r.message, 'success'); loadData(); }
+            else toast(r.error, 'error');
+        } catch { toast('Failed to delete', 'error'); }
+    };
+
+    window.openAddCalModal = function(mid) {
+        document.getElementById('fCalMemberId').value = mid;
+        document.getElementById('fCalName').value = '';
+        document.getElementById('fCalUrl').value = '';
+        document.getElementById('fCalDetails').checked = true;
+        openModal('modalAddCal');
+    };
+
+    async function addCalendar(e) {
+        e.preventDefault();
+        const mid = document.getElementById('fCalMemberId').value;
+        const name = document.getElementById('fCalName').value.trim();
+        const url = document.getElementById('fCalUrl').value.trim();
+        const show_details = document.getElementById('fCalDetails').checked;
+        try {
+            const res = await fetch(`/api/admin/members/${encodeURIComponent(mid)}/calendars`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, url, show_details })
+            });
+            const r = await res.json();
+            if (r.success) { toast(r.message, 'success'); closeModal('modalAddCal'); loadData(); }
+            else toast(r.error, 'error');
+        } catch { toast('Failed to add calendar', 'error'); }
+    }
+
+    window.deleteCal = async function(mid, idx, name) {
+        if (!confirm(`Delete calendar "${name}"?`)) return;
+        try {
+            const res = await fetch(`/api/admin/members/${encodeURIComponent(mid)}/calendars/${idx}`, { method: 'DELETE' });
+            const r = await res.json();
+            if (r.success) { toast(r.message, 'success'); loadData(); }
+            else toast(r.error, 'error');
+        } catch { toast('Failed to delete calendar', 'error'); }
+    };
+
+    window.togglePrivacy = async function(mid, idx, newVal) {
+        try {
+            const res = await fetch(`/api/admin/members/${encodeURIComponent(mid)}/calendars/${idx}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ show_details: newVal })
+            });
+            const r = await res.json();
+            if (r.success) { toast('Privacy updated', 'success'); loadData(); }
+            else toast(r.error, 'error');
+        } catch { toast('Failed to update', 'error'); }
+    };
+
+    window.refreshMember = async function(mid) {
+        toast('Refreshing...', 'success');
+        try {
+            // Use the full refresh endpoint (it's the simplest approach)
+            const res = await fetch('/api/admin/refresh', { method: 'POST' });
+            const r = await res.json();
+            if (r.success) { toast('Refreshed', 'success'); loadData(); }
+            else toast(r.error, 'error');
+        } catch { toast('Failed', 'error'); }
+    };
+
+    async function refreshAll() {
+        toast('Refreshing all calendars...', 'success');
+        try {
+            const res = await fetch('/api/admin/refresh', { method: 'POST' });
+            const r = await res.json();
+            if (r.success) { toast('All calendars refreshed', 'success'); loadData(); }
+            else toast(r.error, 'error');
+        } catch { toast('Failed', 'error'); }
+    }
+
+    function openModal(id) { document.getElementById(id).classList.add('active'); }
+    function closeModal(id) { document.getElementById(id).classList.remove('active'); }
+    window.closeModal = closeModal;
+
+    function toast(msg, type) {
+        const box = document.getElementById('alertBox');
+        const el = document.createElement('div');
+        el.className = `alert-msg ${type}`;
+        el.textContent = msg;
+        box.appendChild(el);
+        setTimeout(() => el.remove(), 4000);
+    }
+
+    function esc(s) {
+        if (!s) return '';
+        const d = document.createElement('div');
+        d.textContent = s;
+        return d.innerHTML;
+    }
+})();
+</script>
+</body>
+</html>

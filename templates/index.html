@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Family Calendar Server</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📅 Family Calendar Server</h1>
+            <p class="subtitle">Merged ICS Calendar Feed</p>
+        </header>
+
+        <main>
+            <section class="card status-card">
+                <h2>Server Status</h2>
+                <div id="status-info" class="status-info">
+                    <div class="loading">Loading status...</div>
+                </div>
+            </section>
+
+            <section class="card actions-card">
+                <h2>Calendar Feed</h2>
+                <p>Subscribe to this calendar in your favorite calendar app:</p>
+                <div class="feed-url">
+                    <code id="feed-url"></code>
+                    <button onclick="copyFeedUrl()" class="btn-copy">📋 Copy</button>
+                </div>
+                <div class="action-buttons">
+                    <a href="/merged_calendar.ics" class="btn btn-primary" download>📥 Download ICS File</a>
+                    <button onclick="refreshStatus()" class="btn btn-secondary">🔄 Refresh Status</button>
+                </div>
+            </section>
+
+            <section class="card instructions-card">
+                <h2>How to Subscribe</h2>
+                <div class="instructions">
+                    <div class="instruction-item">
+                        <h3>📱 iOS/macOS (Apple Calendar)</h3>
+                        <ol>
+                            <li>Open Calendar app</li>
+                            <li>File → New Calendar Subscription (Mac) or Settings → Accounts → Add Account → Other → Add Subscribed Calendar (iOS)</li>
+                            <li>Paste the feed URL above</li>
+                            <li>Set refresh frequency (recommended: hourly)</li>
+                        </ol>
+                    </div>
+                    <div class="instruction-item">
+                        <h3>📧 Google Calendar</h3>
+                        <ol>
+                            <li>Open Google Calendar on web</li>
+                            <li>Click "+" next to "Other calendars"</li>
+                            <li>Select "From URL"</li>
+                            <li>Paste the feed URL above</li>
+                        </ol>
+                    </div>
+                    <div class="instruction-item">
+                        <h3>🖥️ Outlook</h3>
+                        <ol>
+                            <li>Open Outlook</li>
+                            <li>File → Account Settings → Internet Calendars</li>
+                            <li>Click "New" and paste the feed URL</li>
+                        </ol>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <footer>
+            <p>Running on Raspberry Pi 🍓 | <a href="/api/status">API Status</a></p>
+        </footer>
+    </div>
+
+    <script>
+        const protocol = window.location.protocol;
+        const host = window.location.host;
+        const feedUrl = `${protocol}//${host}/merged_calendar.ics`;
+        
+        document.getElementById('feed-url').textContent = feedUrl;
+
+        async function fetchStatus() {
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
+                displayStatus(data);
+            } catch (error) {
+                document.getElementById('status-info').innerHTML = '<div class="error">Failed to fetch status</div>';
+            }
+        }
+
+        function displayStatus(data) {
+            const statusHtml = `
+                <div class="status-grid">
+                    <div class="status-item ${data.last_error ? 'status-error' : 'status-ok'}">
+                        <span class="status-label">Status:</span>
+                        <span class="status-value">${data.last_error ? '❌ Error' : '✅ Running'}</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">Merged Events:</span>
+                        <span class="status-value">${data.merged_events}</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">Calendar Sources:</span>
+                        <span class="status-value">${data.successful_sources}/${data.configured_sources}</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">Duplicates Skipped:</span>
+                        <span class="status-value">${data.duplicate_events_skipped}</span>
+                    </div>
+                    <div class="status-item full-width">
+                        <span class="status-label">Last Refresh:</span>
+                        <span class="status-value">${data.last_refresh_utc ? new Date(data.last_refresh_utc).toLocaleString() : 'Never'}</span>
+                    </div>
+                    ${data.last_error ? `<div class="status-item full-width status-error">
+                        <span class="status-label">Error:</span>
+                        <span class="status-value">${data.last_error}</span>
+                    </div>` : ''}
+                </div>
+            `;
+            document.getElementById('status-info').innerHTML = statusHtml;
+        }
+
+        function copyFeedUrl() {
+            const url = document.getElementById('feed-url').textContent;
+            navigator.clipboard.writeText(url).then(() => {
+                const btn = event.target;
+                const originalText = btn.textContent;
+                btn.textContent = '✅ Copied!';
+                setTimeout(() => {
+                    btn.textContent = originalText;
+                }, 2000);
+            });
+        }
+
+        function refreshStatus() {
+            document.getElementById('status-info').innerHTML = '<div class="loading">Refreshing...</div>';
+            fetchStatus();
+        }
+
+        // Initial load
+        fetchStatus();
+        
+        // Auto-refresh every 30 seconds
+        setInterval(fetchStatus, 30000);
+    </script>
+</body>
+</html>

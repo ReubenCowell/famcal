@@ -1,0 +1,7 @@
+# Example calendar URLs - one URL per line
+# Add your public ICS/iCal URLs here
+
+# Example:
+# https://calendar.google.com/calendar/ical/your-calendar-id/public/basic.ics
+# https://outlook.office365.com/owa/calendar/your-calendar-id/calendar.ics
+# https://example.com/your-calendar.ics

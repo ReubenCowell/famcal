@@ -1,0 +1,18 @@
+[Unit]
+Description=Family Calendar ICS Server
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/famcal
+Environment="PATH=/home/pi/famcal/.venv/bin"
+ExecStart=/home/pi/famcal/.venv/bin/python /home/pi/famcal/family_calendar_server.py --config /home/pi/famcal/family_config.json
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

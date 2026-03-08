@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Family Calendar</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<div class="app-shell">
+    <!-- Top Nav -->
+    <nav class="top-nav">
+        <span class="brand">&#128197; Family Calendar</span>
+        <div class="nav-links">
+            <a href="/" class="active">Calendar</a>
+            <a href="/admin">Admin</a>
+        </div>
+    </nav>
+
+    <!-- Toolbar -->
+    <div class="toolbar">
+        <div class="nav-btns">
+            <button class="btn btn-icon" id="btnPrev" title="Previous month">&#9664;</button>
+            <button class="btn" id="btnToday">Today</button>
+            <button class="btn btn-icon" id="btnNext" title="Next month">&#9654;</button>
+        </div>
+        <span class="month-label" id="monthLabel"></span>
+        <div class="view-switcher">
+            <button id="vsMonth" class="active" title="Month view">Month</button>
+            <button id="vsList" title="List view">List</button>
+        </div>
+    </div>
+
+    <!-- Member pills -->
+    <div class="member-pills" id="memberPills">
+        <span class="label">Members</span>
+    </div>
+
+    <!-- Feed bar (shown when one member selected) -->
+    <div class="feed-bar" id="feedBar" style="display:none;">
+        <span>&#128225; Subscription URL:</span>
+        <code id="feedUrl"></code>
+        <button class="btn btn-sm btn-primary" id="btnCopy">Copy</button>
+        <span class="copy-feedback" id="copyFeedback">Copied!</span>
+    </div>
+
+    <!-- Main content: grid + day panel -->
+    <div class="main-content">
+        <div class="calendar-area">
+            <!-- Month grid -->
+            <div class="month-grid-wrap" id="monthGridWrap">
+                <div class="month-grid" id="monthGrid"></div>
+            </div>
+            <!-- List view -->
+            <div class="list-view" id="listView"></div>
+            <!-- Empty state -->
+            <div class="empty-state" id="emptyState" style="display:none;">
+                <p class="big">No family members configured</p>
+                <p>Visit the <a href="/admin">admin page</a> to add members and calendars.</p>
+            </div>
+        </div>
+        <!-- Day detail panel -->
+        <div class="day-panel hidden" id="dayPanel">
+            <div class="day-panel-header">
+                <h3 id="dayPanelTitle"></h3>
+                <button class="btn btn-sm" id="btnClosePanel">&times;</button>
+            </div>
+            <div class="day-panel-body" id="dayPanelBody"></div>
+        </div>
+    </div>
+</div>
+
+<!-- Tooltip -->
+<div class="ev-tooltip" id="tooltip" style="display:none;"></div>
+
+<script>
+(function() {
+    'use strict';
+
+    // ===== State =====
+    let members = [];
+    let activeMembers = new Set();  // member IDs currently toggled on
+    let events = [];
+    let viewDate = new Date();     // 1st of current view month
+    let selectedDate = null;
+    let currentView = 'month';     // 'month' | 'list'
+    const MAX_EVENTS_PER_CELL = 3;
+
+    // ===== DOM refs =====
+    const $monthLabel  = document.getElementById('monthLabel');
+    const $monthGrid   = document.getElementById('monthGrid');
+    const $monthWrap   = document.getElementById('monthGridWrap');
+    const $listView    = document.getElementById('listView');
+    const $memberPills = document.getElementById('memberPills');
+    const $feedBar     = document.getElementById('feedBar');
+    const $feedUrl     = document.getElementById('feedUrl');
+    const $emptyState  = document.getElementById('emptyState');
+    const $dayPanel    = document.getElementById('dayPanel');
+    const $dayTitle    = document.getElementById('dayPanelTitle');
+    const $dayBody     = document.getElementById('dayPanelBody');
+    const $tooltip     = document.getElementById('tooltip');
+
+    // ===== Init =====
+    viewDate = new Date();
+    viewDate.setDate(1);
+
+    document.getElementById('btnPrev').onclick = () => { viewDate.setMonth(viewDate.getMonth() - 1); refresh(); };
+    document.getElementById('btnNext').onclick = () => { viewDate.setMonth(viewDate.getMonth() + 1); refresh(); };
+    document.getElementById('btnToday').onclick = () => { viewDate = new Date(); viewDate.setDate(1); refresh(); };
+    document.getElementById('btnClosePanel').onclick = () => { selectedDate = null; $dayPanel.classList.add('hidden'); renderGrid(); };
+    document.getElementById('btnCopy').onclick = copyFeed;
+
+    document.getElementById('vsMonth').onclick = () => switchView('month');
+    document.getElementById('vsList').onclick  = () => switchView('list');
+
+    loadMembers();
+
+    // Auto-refresh every 60s
+    setInterval(() => { if (activeMembers.size > 0) fetchEvents(); }, 60000);
+
+    // ===== Functions =====
+
+    async function loadMembers() {
+        try {
+            const res = await fetch('/api/members');
+            const data = await res.json();
+            members = data.members || [];
+        } catch (e) {
+            members = [];
+        }
+        if (members.length === 0) {
+            $emptyState.style.display = '';
+            $monthWrap.style.display = 'none';
+            $memberPills.innerHTML = '<span class="label">Members</span>';
+            return;
+        }
+        $emptyState.style.display = 'none';
+        // Activate all members by default
+        activeMembers = new Set(members.map(m => m.id));
+        renderPills();
+        refresh();
+    }
+
+    function renderPills() {
+        let html = '<span class="label">Members</span>';
+        members.forEach(m => {
+            const isActive = activeMembers.has(m.id);
+            html += `<span class="pill ${isActive ? 'active' : ''}" data-mid="${esc(m.id)}">` +
+                    `<span class="dot" style="background:${esc(m.color)}"></span>${esc(m.name)}</span>`;
+        });
+        $memberPills.innerHTML = html;
+        // Bind clicks
+        $memberPills.querySelectorAll('.pill').forEach(el => {
+            el.onclick = () => toggleMember(el.dataset.mid);
+        });
+        updateFeedBar();
+    }
+
+    function toggleMember(mid) {
+        if (activeMembers.has(mid)) {
+            if (activeMembers.size === 1) return; // keep at least one
+            activeMembers.delete(mid);
+        } else {
+            activeMembers.add(mid);
+        }
+        renderPills();
+        fetchEvents();
+    }
+
+    function updateFeedBar() {
+        if (activeMembers.size === 1) {
+            const mid = [...activeMembers][0];
+            const m = members.find(x => x.id === mid);
+            if (m) {
+                $feedUrl.textContent = m.feed_url;
+                $feedBar.style.display = '';
+                return;
+            }
+        }
+        $feedBar.style.display = 'none';
+    }
+
+    function copyFeed() {
+        const url = $feedUrl.textContent;
+        navigator.clipboard.writeText(url).then(() => {
+            const fb = document.getElementById('copyFeedback');
+            fb.classList.add('show');
+            setTimeout(() => fb.classList.remove('show'), 2000);
+        });
+    }
+
+    async function refresh() {
+        updateMonthLabel();
+        await fetchEvents();
+    }
+
+    function updateMonthLabel() {
+        $monthLabel.textContent = viewDate.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+    }
+
+    async function fetchEvents() {
+        if (activeMembers.size === 0) { events = []; render(); return; }
+        // Calculate range for the visible grid (include leading/trailing days)
+        const y = viewDate.getFullYear(), m = viewDate.getMonth();
+        const first = new Date(y, m, 1);
+        const last = new Date(y, m + 1, 0);
+        // Extend to full weeks
+        const gridStart = new Date(first);
+        gridStart.setDate(gridStart.getDate() - gridStart.getDay());
+        const gridEnd = new Date(last);
+        gridEnd.setDate(gridEnd.getDate() + (6 - gridEnd.getDay()) + 1);
+
+        const startISO = dateToISO(gridStart);
+        const endISO = dateToISO(gridEnd);
+        const ids = [...activeMembers].join(',');
+
+        try {
+            const res = await fetch(`/api/events?start=${startISO}&end=${endISO}&member_ids=${encodeURIComponent(ids)}`);
+            const data = await res.json();
+            events = data.events || [];
+        } catch (e) {
+            events = [];
+        }
+        render();
+    }
+
+    function render() {
+        if (currentView === 'month') {
+            renderGrid();
+        }
+        renderList();
+        if (selectedDate) renderDayPanel();
+    }
+
+    // ===== Month Grid =====
+    function renderGrid() {
+        const y = viewDate.getFullYear(), m = viewDate.getMonth();
+        const first = new Date(y, m, 1);
+        const last = new Date(y, m + 1, 0);
+        const today = new Date();
+        const todayStr = dateToISO(today);
+
+        // Build day map
+        const dayMap = buildDayMap(events);
+
+        let html = '';
+        const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+        days.forEach(d => { html += `<div class="day-header">${d}</div>`; });
+
+        // Grid start
+        const cursor = new Date(first);
+        cursor.setDate(cursor.getDate() - cursor.getDay());
+
+        while (cursor <= last || cursor.getDay() !== 0) {
+            const iso = dateToISO(cursor);
+            const inMonth = cursor.getMonth() === m;
+            const isToday = iso === todayStr;
+            const isSel = selectedDate === iso;
+            let cls = 'day-cell';
+            if (!inMonth) cls += ' outside';
+            if (isToday) cls += ' today';
+            if (isSel) cls += ' selected';
+
+            html += `<div class="${cls}" data-date="${iso}">`;
+            html += `<div class="day-number">${cursor.getDate()}</div>`;
+            html += '<div class="day-events">';
+
+            const dayEvts = dayMap[iso] || [];
+            const shown = dayEvts.slice(0, MAX_EVENTS_PER_CELL);
+            const extra = dayEvts.length - MAX_EVENTS_PER_CELL;
+
+            shown.forEach((ev, idx) => {
+                const color = ev.member_color || '#0078d4';
+                const availCls = 'availability-' + ev.availability;
+                const allDayCls = ev.all_day ? ' all-day' : '';
+                const timePrefix = ev.all_day ? '' : formatShortTime(ev.start) + ' ';
+                html += `<div class="day-event${allDayCls} ${availCls}" ` +
+                        `style="background:${esc(color)}" ` +
+                        `data-eidx="${idx}" data-date="${iso}" ` +
+                        `title="${esc(ev.summary)}">${esc(timePrefix + ev.summary)}</div>`;
+            });
+            if (extra > 0) {
+                html += `<div class="more-events" data-date="${iso}">+${extra} more</div>`;
+            }
+            html += '</div></div>';
+            cursor.setDate(cursor.getDate() + 1);
+        }
+
+        $monthGrid.innerHTML = html;
+
+        // Bind day cell clicks
+        $monthGrid.querySelectorAll('.day-cell').forEach(el => {
+            el.onclick = (e) => {
+                // Don't open panel if clicking an event chip
+                if (e.target.classList.contains('day-event')) return;
+                selectDay(el.dataset.date);
+            };
+        });
+        // Bind more-events clicks
+        $monthGrid.querySelectorAll('.more-events').forEach(el => {
+            el.onclick = () => selectDay(el.dataset.date);
+        });
+        // Event chip hover tooltip
+        $monthGrid.querySelectorAll('.day-event').forEach(el => {
+            el.onmouseenter = (e) => showTooltip(e, el.dataset.date, parseInt(el.dataset.eidx));
+            el.onmouseleave = hideTooltip;
+            el.onclick = (e) => { e.stopPropagation(); selectDay(el.dataset.date); };
+        });
+    }
+
+    function selectDay(iso) {
+        selectedDate = iso;
+        $dayPanel.classList.remove('hidden');
+        renderGrid();
+        renderDayPanel();
+    }
+
+    function renderDayPanel() {
+        if (!selectedDate) return;
+        const d = new Date(selectedDate + 'T00:00:00');
+        $dayTitle.textContent = d.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+        const dayMap = buildDayMap(events);
+        const dayEvts = dayMap[selectedDate] || [];
+        if (dayEvts.length === 0) {
+            $dayBody.innerHTML = '<div class="empty-state"><p>No events</p></div>';
+            return;
+        }
+        $dayBody.innerHTML = dayEvts.map(ev => eventCardHTML(ev)).join('');
+    }
+
+    // ===== List View =====
+    function renderList() {
+        if (events.length === 0) {
+            $listView.innerHTML = '<div class="empty-state"><p class="big">No events in this range</p></div>';
+            return;
+        }
+        // Group by date
+        const groups = {};
+        events.forEach(ev => {
+            if (!ev.start) return;
+            // Only include events for active members
+            if (!activeMembers.has(ev.member_id)) return;
+            const d = ev.start.substring(0, 10);
+            if (!groups[d]) groups[d] = [];
+            groups[d].push(ev);
+        });
+        const sortedDates = Object.keys(groups).sort();
+        let html = '';
+        sortedDates.forEach(dateStr => {
+            const d = new Date(dateStr + 'T00:00:00');
+            html += `<div class="date-group-header">${d.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</div>`;
+            groups[dateStr].forEach(ev => { html += eventCardHTML(ev); });
+        });
+        $listView.innerHTML = html;
+    }
+
+    // ===== Helpers =====
+    function buildDayMap(evts) {
+        const map = {};
+        evts.forEach(ev => {
+            if (!ev.start) return;
+            if (!activeMembers.has(ev.member_id)) return;
+            const startDate = ev.start.substring(0, 10);
+
+            if (ev.all_day && ev.end) {
+                // Span all days from start to end (exclusive)
+                const endDate = ev.end.substring(0, 10);
+                let cur = new Date(startDate + 'T00:00:00');
+                const endD = new Date(endDate + 'T00:00:00');
+                while (cur < endD) {
+                    const iso = dateToISO(cur);
+                    if (!map[iso]) map[iso] = [];
+                    map[iso].push(ev);
+                    cur.setDate(cur.getDate() + 1);
+                }
+                // If start == end for all-day, still add start
+                if (startDate === endDate) {
+                    if (!map[startDate]) map[startDate] = [];
+                    if (!map[startDate].includes(ev)) map[startDate].push(ev);
+                }
+            } else {
+                if (!map[startDate]) map[startDate] = [];
+                map[startDate].push(ev);
+            }
+        });
+        // Sort within each day: all-day first, then by start time
+        for (const k of Object.keys(map)) {
+            map[k].sort((a, b) => {
+                if (a.all_day && !b.all_day) return -1;
+                if (!a.all_day && b.all_day) return 1;
+                return (a.start || '').localeCompare(b.start || '');
+            });
+        }
+        return map;
+    }
+
+    function eventCardHTML(ev) {
+        const color = ev.member_color || '#0078d4';
+        const timeStr = ev.all_day ? 'All day' : formatTimeRange(ev.start, ev.end);
+        let html = `<div class="event-card" style="border-left-color:${esc(color)}">`;
+        html += `<div class="ev-time">${esc(timeStr)} <span class="avail-badge avail-${ev.availability}">${esc(ev.availability)}</span></div>`;
+        html += `<div class="ev-title"><span class="member-dot" style="background:${esc(color)}"></span>${esc(ev.summary)}</div>`;
+        if (ev.location && ev.location !== 'None' && ev.location !== '') {
+            html += `<div class="ev-meta">&#128205; ${esc(ev.location)}</div>`;
+        }
+        if (ev.description && ev.description !== 'None' && ev.description !== '') {
+            html += `<div class="ev-meta">${esc(ev.description.substring(0, 150))}</div>`;
+        }
+        if (members.length > 1) {
+            html += `<div class="ev-meta" style="margin-top:4px;"><span class="member-dot" style="background:${esc(color)};vertical-align:middle;"></span> ${esc(ev.member_name)}</div>`;
+        }
+        html += '</div>';
+        return html;
+    }
+
+    function showTooltip(e, dateStr, eidx) {
+        const dayMap = buildDayMap(events);
+        const dayEvts = dayMap[dateStr] || [];
+        const ev = dayEvts[eidx];
+        if (!ev) return;
+        const timeStr = ev.all_day ? 'All day' : formatTimeRange(ev.start, ev.end);
+        let html = `<div class="tt-title">${esc(ev.summary)}</div>`;
+        html += `<div class="tt-time">${esc(timeStr)}</div>`;
+        if (ev.location && ev.location !== 'None' && ev.location !== '') {
+            html += `<div class="tt-loc">&#128205; ${esc(ev.location)}</div>`;
+        }
+        if (members.length > 1) {
+            html += `<div class="tt-member">${esc(ev.member_name)}</div>`;
+        }
+        $tooltip.innerHTML = html;
+        $tooltip.style.display = '';
+        const rect = e.target.getBoundingClientRect();
+        $tooltip.style.top = (rect.bottom + 6) + 'px';
+        $tooltip.style.left = Math.min(rect.left, window.innerWidth - 320) + 'px';
+    }
+
+    function hideTooltip() { $tooltip.style.display = 'none'; }
+
+    function switchView(v) {
+        currentView = v;
+        document.getElementById('vsMonth').classList.toggle('active', v === 'month');
+        document.getElementById('vsList').classList.toggle('active', v === 'list');
+        $monthWrap.classList.toggle('hidden', v !== 'month');
+        $listView.classList.toggle('active', v === 'list');
+    }
+
+    function dateToISO(d) {
+        return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    }
+
+    function formatShortTime(iso) {
+        if (!iso || iso.length <= 10) return '';
+        const d = new Date(iso);
+        return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    }
+
+    function formatTimeRange(startISO, endISO) {
+        const s = formatShortTime(startISO);
+        const e = formatShortTime(endISO);
+        if (s && e) return s + ' \u2013 ' + e;
+        return s || 'All day';
+    }
+
+    function esc(s) {
+        if (!s) return '';
+        const d = document.createElement('div');
+        d.textContent = s;
+        return d.innerHTML;
+    }
+})();
+</script>
+</body>
+</html>
