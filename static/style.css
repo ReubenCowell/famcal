@@ -547,7 +547,7 @@ body {
 .week-grid { width: 100%; }
 .week-header-row {
     display: grid;
-    grid-template-columns: 70px repeat(7, 1fr);
+    grid-template-columns: 80px repeat(7, 1fr);
     background: var(--surface-alt);
     border-bottom: 1px solid var(--border);
     position: sticky;
@@ -576,8 +576,8 @@ body {
 }
 .week-allday-row {
     display: grid;
-    grid-template-columns: 70px repeat(7, 1fr);
-    border-bottom: 2px solid var(--border-strong);
+    grid-template-columns: 80px repeat(7, 1fr);
+    border-bottom: 1px solid var(--border);
     min-height: 28px;
 }
 .week-allday-cell {
@@ -587,14 +587,14 @@ body {
     flex-direction: column;
     gap: 1px;
 }
-.week-allday-cell:last-child { border-right: none; }
+.week-allday-cell:last-child { border-right: 1px solid var(--border); }
 .week-body { max-height: calc(100vh - 260px); overflow-y: auto; position: relative; }
 .week-row {
     display: grid;
     grid-template-columns: 80px repeat(7, 1fr);
     min-height: 60px;
     height: auto;
-    border-bottom: 2px solid var(--border-strong);
+    border-bottom: 1px solid var(--border);
     position: relative;
 }
 .week-row:last-child { border-bottom: 1px solid var(--border-strong); }
@@ -603,7 +603,7 @@ body {
     align-items: flex-start;
     justify-content: flex-end;
     padding: 8px 12px 0 0;
-    border-right: 2px solid var(--border-strong);
+    border-right: 1px solid var(--border);
     background: var(--surface-alt);
     position: sticky;
     left: 0;
@@ -628,8 +628,20 @@ body {
     position: relative;
     background: var(--surface);
     min-height: 100%;
+    flex-wrap: wrap;
+    align-content: flex-start;
 }
-.week-cell:last-child { border-right: 1px solid var(--border-strong); }
+.week-cell:last-child { border-right: 1px solid var(--border); }
+.week-event-group {
+    display: flex;
+    flex-direction: row;
+    gap: 2px;
+    width: 100%;
+}
+.week-event-group .week-event {
+    flex: 1;
+    min-width: 0;
+}
 .week-cell:hover { background: rgba(0, 120, 212, .02); }
 .week-cell-today { 
     background: rgba(0, 120, 212, .06);

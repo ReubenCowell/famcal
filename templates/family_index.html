@@ -771,6 +771,36 @@
         }
         html += '</div>';
 
+        // Helper: detect if two events overlap
+        function eventsOverlap(ev1, ev2) {
+            const start1 = new Date(ev1.start).getTime();
+            const end1 = ev1.end ? new Date(ev1.end).getTime() : start1 + 3600000;
+            const start2 = new Date(ev2.start).getTime();
+            const end2 = ev2.end ? new Date(ev2.end).getTime() : start2 + 3600000;
+            return start1 < end2 && start2 < end1;
+        }
+
+        // Helper: group overlapping events
+        function groupOverlappingEvents(evts) {
+            if (evts.length <= 1) return evts.map(ev => [ev]);
+            const groups = [];
+            const used = new Set();
+            for (let i = 0; i < evts.length; i++) {
+                if (used.has(i)) continue;
+                const group = [evts[i]];
+                used.add(i);
+                for (let j = i + 1; j < evts.length; j++) {
+                    if (used.has(j)) continue;
+                    if (group.some(gev => eventsOverlap(gev, evts[j]))) {
+                        group.push(evts[j]);
+                        used.add(j);
+                    }
+                }
+                groups.push(group);
+            }
+            return groups;
+        }
+
         // Time grid body
         html += '<div class="week-body">';
         for (let h = 0; h < 24; h++) {
@@ -788,18 +818,29 @@
                     return evHour === h;
                 });
                 html += `<div class="week-cell${isToday ? ' week-cell-today' : ''}" data-date="${iso}">`;
-                dayEvts.forEach(ev => {
-                    const color = ev.member_color || '#0078d4';
-                    const time = formatShortTime(ev.start);
-                    const evIdx = displayEvents.length;
-                    displayEvents.push(ev);
-                    html += `<div class="week-event${ev.availability === 'tentative' ? ' week-event-tentative' : ''}" style="background:${esc(color)}" data-ev-idx="${evIdx}" title="${esc(ev.summary)}">`;
-                    html += `<span class="week-ev-time">${esc(time)}</span> ${esc(ev.summary)}`;
-                    if (ev.location && ev.location !== 'None' && ev.location !== '') {
-                        html += `<span class="week-ev-loc">&#128205; ${esc(ev.location)}</span>`;
+                
+                const eventGroups = groupOverlappingEvents(dayEvts);
+                eventGroups.forEach(group => {
+                    if (group.length > 1) {
+                        html += '<div class="week-event-group">';
                     }
-                    html += '</div>';
+                    group.forEach(ev => {
+                        const color = ev.member_color || '#0078d4';
+                        const time = formatShortTime(ev.start);
+                        const evIdx = displayEvents.length;
+                        displayEvents.push(ev);
+                        html += `<div class="week-event${ev.availability === 'tentative' ? ' week-event-tentative' : ''}" style="background:${esc(color)}" data-ev-idx="${evIdx}" title="${esc(ev.summary)}">`;
+                        html += `<span class="week-ev-time">${esc(time)}</span> ${esc(ev.summary)}`;
+                        if (ev.location && ev.location !== 'None' && ev.location !== '') {
+                            html += `<span class="week-ev-loc">&#128205; ${esc(ev.location)}</span>`;
+                        }
+                        html += '</div>';
+                    });
+                    if (group.length > 1) {
+                        html += '</div>';
+                    }
                 });
+                
                 html += '</div>';
             }
             html += '</div>';
