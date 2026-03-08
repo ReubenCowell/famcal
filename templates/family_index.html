@@ -733,8 +733,8 @@
         const filtered = getFilteredEvents();
         const dayMap = buildDayMap(filtered);
 
-        const hours = [];
-        for (let h = 0; h < 24; h++) hours.push(h);
+        const HOUR_HEIGHT = 60; // pixels per hour
+        const MINUTES_PER_PIXEL = 60 / HOUR_HEIGHT;
 
         let html = '<div class="week-header-row">';
         html += '<div class="week-time-gutter week-header-cell"></div>';
@@ -771,93 +771,126 @@
         }
         html += '</div>';
 
-        // Helper: detect if two events overlap
-        function eventsOverlap(ev1, ev2) {
-            const start1 = new Date(ev1.start).getTime();
-            const end1 = ev1.end ? new Date(ev1.end).getTime() : start1 + 3600000;
-            const start2 = new Date(ev2.start).getTime();
-            const end2 = ev2.end ? new Date(ev2.end).getTime() : start2 + 3600000;
-            return start1 < end2 && start2 < end1;
+        // Helper: calculate event position and height
+        function getEventMetrics(ev) {
+            const start = new Date(ev.start);
+            const end = ev.end ? new Date(ev.end) : new Date(start.getTime() + 3600000);
+            const startMinutes = start.getHours() * 60 + start.getMinutes();
+            const endMinutes = end.getHours() * 60 + end.getMinutes();
+            const durationMinutes = endMinutes - startMinutes;
+            const top = startMinutes / MINUTES_PER_PIXEL;
+            const height = Math.max(durationMinutes / MINUTES_PER_PIXEL, 20);
+            return { top, height, startMinutes, endMinutes };
         }
 
-        // Helper: group overlapping events
-        function groupOverlappingEvents(evts) {
-            if (evts.length <= 1) return evts.map(ev => [ev]);
-            const groups = [];
-            const used = new Set();
-            for (let i = 0; i < evts.length; i++) {
-                if (used.has(i)) continue;
-                const group = [evts[i]];
-                used.add(i);
-                for (let j = i + 1; j < evts.length; j++) {
-                    if (used.has(j)) continue;
-                    if (group.some(gev => eventsOverlap(gev, evts[j]))) {
-                        group.push(evts[j]);
-                        used.add(j);
+        // Helper: detect if two events overlap
+        function eventsOverlap(ev1, ev2) {
+            const m1 = getEventMetrics(ev1);
+            const m2 = getEventMetrics(ev2);
+            return m1.startMinutes < m2.endMinutes && m2.startMinutes < m1.endMinutes;
+        }
+
+        // Helper: layout overlapping events
+        function layoutEvents(events) {
+            const columns = [];
+            events.forEach(ev => {
+                let placed = false;
+                for (let i = 0; i < columns.length; i++) {
+                    const hasConflict = columns[i].some(existing => eventsOverlap(existing, ev));
+                    if (!hasConflict) {
+                        columns[i].push(ev);
+                        ev._column = i;
+                        placed = true;
+                        break;
                     }
                 }
-                groups.push(group);
-            }
-            return groups;
+                if (!placed) {
+                    ev._column = columns.length;
+                    columns.push([ev]);
+                }
+            });
+            
+            events.forEach(ev => {
+                ev._totalColumns = columns.length;
+            });
         }
 
         // Time grid body
-        html += '<div class="week-body">';
+        html += '<div class="week-body-container">';
+        html += '<div class="week-body-inner">';
+        
+        // Time gutter with hour labels
+        html += '<div class="week-time-column">';
         for (let h = 0; h < 24; h++) {
-            html += '<div class="week-row">';
             const label = h === 0 ? '12 AM' : h < 12 ? h + ' AM' : h === 12 ? '12 PM' : (h - 12) + ' PM';
-            html += `<div class="week-time-gutter"><span class="week-time-label">${label}</span></div>`;
-            for (let d = 0; d < 7; d++) {
-                const day = new Date(weekStart);
-                day.setDate(day.getDate() + d);
-                const iso = dateToISO(day);
-                const isToday = iso === todayStr;
-                const dayEvts = (dayMap[iso] || []).filter(ev => {
-                    if (ev.all_day) return false;
-                    const evHour = new Date(ev.start).getHours();
-                    return evHour === h;
-                });
-                html += `<div class="week-cell${isToday ? ' week-cell-today' : ''}" data-date="${iso}">`;
-                
-                const eventGroups = groupOverlappingEvents(dayEvts);
-                eventGroups.forEach(group => {
-                    if (group.length > 1) {
-                        html += '<div class="week-event-group">';
-                    }
-                    group.forEach(ev => {
-                        const color = ev.member_color || '#0078d4';
-                        const time = formatShortTime(ev.start);
-                        const evIdx = displayEvents.length;
-                        displayEvents.push(ev);
-                        html += `<div class="week-event${ev.availability === 'tentative' ? ' week-event-tentative' : ''}" style="background:${esc(color)}" data-ev-idx="${evIdx}" title="${esc(ev.summary)}">`;
-                        html += `<span class="week-ev-time">${esc(time)}</span> ${esc(ev.summary)}`;
-                        if (ev.location && ev.location !== 'None' && ev.location !== '') {
-                            html += `<span class="week-ev-loc">&#128205; ${esc(ev.location)}</span>`;
-                        }
-                        html += '</div>';
-                    });
-                    if (group.length > 1) {
-                        html += '</div>';
-                    }
-                });
-                
-                html += '</div>';
-            }
+            html += `<div class="week-hour-slot" style="height:${HOUR_HEIGHT}px">`;
+            html += `<span class="week-time-label">${label}</span>`;
             html += '</div>';
         }
         html += '</div>';
 
+        // Day columns
+        html += '<div class="week-days-grid">';
+        for (let d = 0; d < 7; d++) {
+            const day = new Date(weekStart);
+            day.setDate(day.getDate() + d);
+            const iso = dateToISO(day);
+            const isToday = iso === todayStr;
+            
+            // Get all non-all-day events for this day
+            const dayEvts = (dayMap[iso] || []).filter(ev => !ev.all_day);
+            
+            // Layout events to handle overlaps
+            dayEvts.sort((a, b) => new Date(a.start) - new Date(b.start));
+            layoutEvents(dayEvts);
+
+            html += `<div class="week-day-column${isToday ? ' today' : ''}" data-date="${iso}">`;
+            
+            // Hour grid lines
+            for (let h = 0; h < 24; h++) {
+                html += `<div class="week-hour-line" style="top:${h * HOUR_HEIGHT}px"></div>`;
+            }
+            
+            // Render events
+            dayEvts.forEach(ev => {
+                const metrics = getEventMetrics(ev);
+                const color = ev.member_color || '#0078d4';
+                const time = formatShortTime(ev.start);
+                const endTime = formatShortTime(ev.end);
+                const evIdx = displayEvents.length;
+                displayEvents.push(ev);
+                
+                const width = ev._totalColumns > 1 ? (100 / ev._totalColumns) : 100;
+                const left = ev._totalColumns > 1 ? (ev._column * width) : 0;
+                
+                html += `<div class="week-event-positioned${ev.availability === 'tentative' ? ' week-event-tentative' : ''}" `;
+                html += `style="top:${metrics.top}px;height:${metrics.height}px;left:${left}%;width:${width}%;background:${esc(color)}" `;
+                html += `data-ev-idx="${evIdx}" title="${esc(ev.summary)}">`;
+                html += `<div class="week-ev-time">${esc(time)}</div>`;
+                html += `<div class="week-ev-title">${esc(ev.summary)}</div>`;
+                if (ev.location && ev.location !== 'None' && ev.location !== '') {
+                    html += `<div class="week-ev-loc">&#128205; ${esc(ev.location)}</div>`;
+                }
+                html += '</div>';
+            });
+            
+            html += '</div>';
+        }
+        html += '</div>'; // week-days-grid
+        html += '</div>'; // week-body-inner
+        html += '</div>'; // week-body-container
+
         $weekGrid.innerHTML = html;
 
-        // Bind week cell clicks
-        $weekGrid.querySelectorAll('.week-cell').forEach(el => {
+        // Bind day column clicks
+        $weekGrid.querySelectorAll('.week-day-column').forEach(el => {
             el.onclick = (e) => {
-                if (e.target.classList.contains('week-event')) return;
+                if (e.target.closest('.week-event-positioned')) return;
                 selectDay(el.dataset.date);
             };
         });
         // Week event clicks → open modal
-        $weekGrid.querySelectorAll('.week-event').forEach(el => {
+        $weekGrid.querySelectorAll('.week-event-positioned').forEach(el => {
             el.onclick = (e) => {
                 e.stopPropagation();
                 const idx = parseInt(el.dataset.evIdx);

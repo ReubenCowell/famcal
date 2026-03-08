@@ -28,12 +28,9 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-import secrets
-
 import requests
-from flask import Flask, Response, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, Response, jsonify, render_template, request, url_for
 from icalendar import Calendar, Event
-from werkzeug.security import check_password_hash, generate_password_hash
 
 DEFAULT_CONFIG_FILE = "family_config.json"
 DEFAULT_REFRESH_SECONDS = 3600
@@ -63,6 +60,9 @@ class CalendarSource:
     show_details: bool  # If False, only show busy_text but preserve event's TRANSP/STATUS
     busy_text: str = "Busy"  # Custom text shown when show_details is False
     show_location: bool = False  # If True, preserve location even when details are hidden
+    source_type: str = "ics"  # "ics" for direct ICS URL, "caldav" for CalDAV subscription
+    caldav_username: str = ""  # Username for CalDAV authentication
+    caldav_password: str = ""  # Password for CalDAV authentication
 
 
 @dataclass
@@ -81,8 +81,6 @@ class ServerConfig:
     host: str = "0.0.0.0"
     port: int = 8000
     domain: str | None = None
-    password_hash: str = ""
-    secret_key: str = ""
 
 
 @dataclass
@@ -130,7 +128,10 @@ class FamilyCalendarManager:
                     name=cal.get("name", "Untitled"),
                     show_details=cal.get("show_details", True),
                     busy_text=cal.get("busy_text", "Busy"),
-                    show_location=cal.get("show_location", False)
+                    show_location=cal.get("show_location", False),
+                    source_type=cal.get("source_type", "ics"),
+                    caldav_username=cal.get("caldav_username", ""),
+                    caldav_password=cal.get("caldav_password", "")
                 )
                 for cal in member_data.get("calendars", [])
             ]
@@ -151,9 +152,7 @@ class FamilyCalendarManager:
             refresh_interval_seconds=server_settings.get("refresh_interval_seconds", 3600),
             host=server_settings.get("host", "0.0.0.0"),
             port=server_settings.get("port", 8000),
-            domain=server_settings.get("domain"),
-            password_hash=server_settings.get("password_hash", ""),
-            secret_key=server_settings.get("secret_key", "")
+            domain=server_settings.get("domain")
         )
 
         logging.info("Loaded config for %d family members", len(self.members))
@@ -171,7 +170,10 @@ class FamilyCalendarManager:
                             "name": cal.name,
                             "show_details": cal.show_details,
                             "busy_text": cal.busy_text,
-                            "show_location": cal.show_location
+                            "show_location": cal.show_location,
+                            "source_type": cal.source_type,
+                            "caldav_username": cal.caldav_username,
+                            "caldav_password": cal.caldav_password
                         }
                         for cal in member.calendars
                     ]
@@ -182,9 +184,7 @@ class FamilyCalendarManager:
                 "refresh_interval_seconds": self.server_config.refresh_interval_seconds,
                 "host": self.server_config.host,
                 "port": self.server_config.port,
-                "domain": self.server_config.domain or "",
-                "password_hash": self.server_config.password_hash,
-                "secret_key": self.server_config.secret_key
+                "domain": self.server_config.domain or ""
             }
         }
         
@@ -224,6 +224,12 @@ class FamilyCalendarManager:
 
 def fetch_calendar_data(url: str, timeout_seconds: int = 30) -> bytes:
     """Fetch calendar data from a URL."""
+    # Convert webcal:// to https:// (webcal is just http(s) with a different protocol handler)
+    if url.startswith("webcal://"):
+        url = "https://" + url[9:]
+    elif url.startswith("webcals://"):
+        url = "https://" + url[10:]
+    
     response = requests.get(
         url,
         timeout=timeout_seconds,
@@ -231,6 +237,72 @@ def fetch_calendar_data(url: str, timeout_seconds: int = 30) -> bytes:
     )
     response.raise_for_status()
     return response.content
+
+
+def fetch_caldav_calendar_data(
+    url: str,
+    username: str,
+    password: str,
+    timeout_seconds: int = 30
+) -> bytes:
+    """Fetch calendar data from a CalDAV server and convert to ICS."""
+    try:
+        from caldav import DAVClient
+        
+        # Connect to CalDAV server
+        client = DAVClient(
+            url=url,
+            username=username,
+            password=password,
+            timeout=timeout_seconds
+        )
+        
+        # Get the principal and calendars
+        principal = client.principal()
+        calendars = principal.get_calendars()
+        
+        if not calendars:
+            raise ValueError(f"No calendars found at {url}")
+        
+        # Create a combined calendar from all events
+        combined_calendar = Calendar()
+        combined_calendar.add('prodid', '-//Family Calendar CalDAV Sync//EN')
+        combined_calendar.add('version', '2.0')
+        combined_calendar.add('calscale', 'GREGORIAN')
+        
+        seen_tzids: set[str] = set()
+        
+        for calendar in calendars:
+            try:
+                # Get all events from this calendar
+                events = calendar.get_events()
+                
+                for event in events:
+                    # Parse the event data
+                    event_data = event.data
+                    cal = Calendar.from_ical(event_data)
+                    
+                    # Copy timezone components
+                    for tz_component in cal.walk("VTIMEZONE"):
+                        tzid_value = tz_component.get("TZID")
+                        tzid = str(tzid_value).strip() if tzid_value else ""
+                        if tzid and tzid not in seen_tzids:
+                            seen_tzids.add(tzid)
+                            combined_calendar.add_component(tz_component)
+                    
+                    # Add VEVENT components
+                    for component in cal.walk():
+                        if component.name == 'VEVENT':
+                            combined_calendar.add_component(component)
+                            
+            except Exception as e:
+                logging.warning(f"Error processing CalDAV calendar {calendar}: {e}")
+        
+        # Convert to ICS bytes
+        return combined_calendar.to_ical()
+        
+    except Exception as exc:
+        raise ValueError(f"Failed to fetch CalDAV data from {url}: {exc}") from exc
 
 
 def parse_calendar_data(raw_data: bytes, source_url: str) -> Calendar:
@@ -326,12 +398,26 @@ def merge_member_calendars(
     successful_sources = 0
 
     for calendar_source in member.calendars:
-        if not calendar_source.url or not calendar_source.url.startswith("http"):
+        # Accept http://, https://, webcal://, and webcals:// URLs
+        if not calendar_source.url or not (calendar_source.url.startswith("http") or calendar_source.url.startswith("webcal")):
             logging.warning("Skipping invalid URL for %s: %s", member.name, calendar_source.name)
             continue
 
         try:
-            raw_data = fetch_calendar_data(calendar_source.url, timeout_seconds)
+            # Fetch data based on source type
+            if calendar_source.source_type == "caldav":
+                if not calendar_source.caldav_username or not calendar_source.caldav_password:
+                    logging.warning("Skipping CalDAV source without credentials: %s", calendar_source.name)
+                    continue
+                raw_data = fetch_caldav_calendar_data(
+                    calendar_source.url,
+                    calendar_source.caldav_username,
+                    calendar_source.caldav_password,
+                    timeout_seconds
+                )
+            else:
+                raw_data = fetch_calendar_data(calendar_source.url, timeout_seconds)
+            
             calendar = parse_calendar_data(raw_data, calendar_source.url)
             
             # Copy timezone components
@@ -529,66 +615,6 @@ def create_app(manager: FamilyCalendarManager, fetch_timeout: int) -> Flask:
     """Create Flask application."""
     app = Flask(__name__)
     app.json.sort_keys = False
-    # Use a persistent secret key so sessions survive across Gunicorn workers and restarts
-    if not manager.server_config.secret_key:
-        manager.server_config.secret_key = secrets.token_hex(32)
-        manager.save_config()
-    app.secret_key = os.getenv("SECRET_KEY", manager.server_config.secret_key)
-
-    # ===== Authentication =====
-    PUBLIC_PATHS = {"/login", "/static"}
-
-    @app.before_request
-    def require_login():
-        """Require password for all routes except login, static files, and ICS feeds."""
-        if not manager.server_config.password_hash:
-            return  # No password set, skip auth
-        path = request.path
-        if path.startswith("/static") or path == "/login":
-            return
-        # Allow ICS feed URLs without auth (for calendar app subscriptions)
-        if path.endswith("/calendar.ics"):
-            return
-        if not session.get("authenticated"):
-            return redirect(url_for("login"))
-
-    @app.route("/login", methods=["GET", "POST"])
-    def login():
-        """Login page with password-only authentication."""
-        if not manager.server_config.password_hash:
-            return redirect("/")
-        if request.method == "POST":
-            password = request.form.get("password", "")
-            if check_password_hash(manager.server_config.password_hash, password):
-                session["authenticated"] = True
-                return redirect("/")
-            return render_template("login.html", error="Incorrect password. Please try again.")
-        return render_template("login.html")
-
-    @app.get("/logout")
-    def logout():
-        """Clear session and redirect to login."""
-        session.clear()
-        return redirect("/login")
-
-    @app.post("/api/admin/set-password")
-    def api_set_password():
-        """Set or update the app password."""
-        data = request.get_json()
-        password = data.get("password", "").strip()
-        if len(password) < 4:
-            return jsonify({"success": False, "error": "Password must be at least 4 characters"}), 400
-        manager.server_config.password_hash = generate_password_hash(password)
-        manager.save_config()
-        session["authenticated"] = True
-        return jsonify({"success": True, "message": "Password updated"})
-
-    @app.post("/api/admin/remove-password")
-    def api_remove_password():
-        """Remove the app password (make it public)."""
-        manager.server_config.password_hash = ""
-        manager.save_config()
-        return jsonify({"success": True, "message": "Password removed"})
 
     @app.get("/")
     def index():
@@ -620,7 +646,9 @@ def create_app(manager: FamilyCalendarManager, fetch_timeout: int) -> Flask:
                         "has_url": bool(cal.url and cal.url.startswith("http")),
                         "show_details": cal.show_details,
                         "busy_text": cal.busy_text,
-                        "url": cal.url if cal.url else ""
+                        "url": cal.url if cal.url else "",
+                        "source_type": cal.source_type,
+                        "caldav_username": cal.caldav_username if cal.source_type == "caldav" else ""
                     }
                     for cal in member.calendars
                 ]
@@ -673,7 +701,9 @@ def create_app(manager: FamilyCalendarManager, fetch_timeout: int) -> Flask:
                         "has_url": bool(cal.url and cal.url.startswith("http")),
                         "show_details": cal.show_details,
                         "busy_text": cal.busy_text,
-                        "url": cal.url
+                        "url": cal.url,
+                        "source_type": cal.source_type,
+                        "caldav_username": cal.caldav_username if cal.source_type == "caldav" else ""
                     }
                     for cal in member.calendars
                 ]
@@ -909,16 +939,32 @@ def create_app(manager: FamilyCalendarManager, fetch_timeout: int) -> Flask:
             name = data.get("name", "").strip()
             show_details = data.get("show_details", True)
             busy_text = data.get("busy_text", "Busy").strip() or "Busy"
+            source_type = data.get("source_type", "ics").strip()
+            caldav_username = data.get("caldav_username", "").strip()
+            caldav_password = data.get("caldav_password", "").strip()
 
             if not url or not name:
                 return jsonify({"success": False, "error": "URL and name are required"}), 400
 
-            if not url.startswith("http"):
-                return jsonify({"success": False, "error": "URL must start with http:// or https://"}), 400
+            if not (url.startswith("http") or url.startswith("webcal")):
+                return jsonify({"success": False, "error": "URL must start with http://, https://, or webcal://"}), 400
+            
+            # Validate CalDAV sources have credentials
+            if source_type == "caldav" and (not caldav_username or not caldav_password):
+                return jsonify({"success": False, "error": "CalDAV sources require username and password"}), 400
 
             member = manager.members[member_id]
             show_location = data.get("show_location", False)
-            member.calendars.append(CalendarSource(url=url, name=name, show_details=show_details, busy_text=busy_text, show_location=show_location))
+            member.calendars.append(CalendarSource(
+                url=url,
+                name=name,
+                show_details=show_details,
+                busy_text=busy_text,
+                show_location=show_location,
+                source_type=source_type,
+                caldav_username=caldav_username,
+                caldav_password=caldav_password
+            ))
             manager.statuses[member_id].configured_sources = len(member.calendars)
             
             manager.save_config()
@@ -976,8 +1022,8 @@ def create_app(manager: FamilyCalendarManager, fetch_timeout: int) -> Flask:
             
             if "url" in data:
                 url = data["url"].strip()
-                if url and not url.startswith("http"):
-                    return jsonify({"success": False, "error": "URL must start with http:// or https://"}), 400
+                if url and not (url.startswith("http") or url.startswith("webcal")):
+                    return jsonify({"success": False, "error": "URL must start with http://, https://, or webcal://"}), 400
                 calendar.url = url
             
             if "name" in data:
@@ -991,6 +1037,19 @@ def create_app(manager: FamilyCalendarManager, fetch_timeout: int) -> Flask:
             
             if "show_location" in data:
                 calendar.show_location = bool(data["show_location"])
+            
+            if "source_type" in data:
+                calendar.source_type = data["source_type"].strip() or "ics"
+            
+            if "caldav_username" in data:
+                calendar.caldav_username = data["caldav_username"].strip()
+            
+            if "caldav_password" in data:
+                calendar.caldav_password = data["caldav_password"].strip()
+            
+            # Validate CalDAV sources have credentials
+            if calendar.source_type == "caldav" and (not calendar.caldav_username or not calendar.caldav_password):
+                return jsonify({"success": False, "error": "CalDAV sources require username and password"}), 400
             
             manager.save_config()
             

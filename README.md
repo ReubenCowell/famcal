@@ -1,12 +1,13 @@
 # Family Calendar Server
 
-A self-hosted family calendar service that merges ICS feeds from any calendar provider (Google, Outlook, Apple, etc.) into per-member subscribable feeds, with an Outlook-style web UI.
+A self-hosted family calendar service that merges ICS feeds from any calendar provider (Google, Outlook, Apple, etc.) into per-member subscribable feeds, with an Outlook-style web UI. **Now supports CalDAV subscriptions** for automatic syncing from CalDAV-enabled servers!
 
 ## Features
 
 - **Outlook-style month grid** with colored event bars, day detail panel, and list view
 - **Dynamic family members** — managed entirely through the admin UI
 - **Per-member ICS feeds** — subscribable `/<member_id>/calendar.ics` URLs
+- **CalDAV support** — Subscribe to CalDAV calendars with automatic background syncing
 - **Privacy mode** — per-calendar toggle: full details or "Busy" only
 - **Color-coded members** with filter pills to toggle visibility
 - **Mobile-friendly** responsive design

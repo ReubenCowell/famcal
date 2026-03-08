@@ -15,7 +15,6 @@
         <div class="nav-links">
             <a href="/">Calendar</a>
             <a href="/admin" class="active">Admin</a>
-            <a href="/logout" id="logoutLink" style="display:none;">Logout</a>
             <button class="theme-toggle" title="Toggle theme">&#9684;</button>
         </div>
     </nav>
@@ -30,24 +29,6 @@
         </div>
 
         <div id="alertBox" class="alert-toast"></div>
-
-        <!-- Password Section -->
-        <div class="member-card" style="margin-bottom:var(--sp-6);">
-            <div class="member-card-header">
-                <div class="member-title"><div><h2>&#128274; Password Protection</h2></div></div>
-            </div>
-            <div class="member-card-body">
-                <p id="pwStatus" style="margin-bottom:var(--sp-3);font-size:.875rem;color:var(--text-secondary);">Checking...</p>
-                <div style="display:flex;gap:var(--sp-2);align-items:flex-end;flex-wrap:wrap;">
-                    <div class="form-group" style="margin-bottom:0;flex:1;min-width:200px;">
-                        <label for="fPassword">New Password</label>
-                        <input type="password" id="fPassword" placeholder="Enter new password" style="width:100%;padding:var(--sp-2) var(--sp-3);border:1px solid var(--border-strong);border-radius:var(--radius-sm);font-size:.875rem;">
-                    </div>
-                    <button class="btn btn-primary" onclick="setPassword()">Set Password</button>
-                    <button class="btn btn-danger" id="btnRemovePw" onclick="removePassword()" style="display:none;">Remove Password</button>
-                </div>
-            </div>
-        </div>
 
         <div id="membersContainer">
             <div class="empty-state" id="adminEmpty">
@@ -92,9 +73,33 @@
                 <input type="text" id="fEditCalName" required placeholder="e.g. Work Calendar">
             </div>
             <div class="form-group">
-                <label for="fEditCalUrl">ICS URL</label>
+                <label>Source Type</label>
+                <div style="display:flex;gap:var(--sp-3);margin-top:var(--sp-2);">
+                    <label style="display:flex;align-items:center;gap:var(--sp-1);font-weight:400;cursor:pointer;">
+                        <input type="radio" name="fEditCalSourceType" value="ics" checked onchange="toggleEditCalDAVFields(false)">
+                        ICS URL
+                    </label>
+                    <label style="display:flex;align-items:center;gap:var(--sp-1);font-weight:400;cursor:pointer;">
+                        <input type="radio" name="fEditCalSourceType" value="caldav" onchange="toggleEditCalDAVFields(true)">
+                        CalDAV Account
+                    </label>
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="fEditCalUrl" id="fEditCalUrlLabel">ICS URL</label>
                 <input type="url" id="fEditCalUrl" required placeholder="https://calendar.google.com/...">
-                <small>Public ICS/iCal subscription URL</small>
+                <small id="fEditCalUrlHint">Public ICS/iCal URL (supports http://, https://, webcal://)</small>
+            </div>
+            <div id="editCaldavFieldsGroup" style="display:none;">
+                <div class="form-group">
+                    <label for="fEditCalDAVUsername">CalDAV Username</label>
+                    <input type="text" id="fEditCalDAVUsername" placeholder="username@example.com">
+                </div>
+                <div class="form-group">
+                    <label for="fEditCalDAVPassword">CalDAV Password</label>
+                    <input type="password" id="fEditCalDAVPassword" placeholder="Leave blank to keep existing">
+                    <small>Only enter if changing password</small>
+                </div>
             </div>
             <div class="form-group">
                 <div class="checkbox-row">
@@ -125,9 +130,33 @@
                 <input type="text" id="fCalName" required placeholder="e.g. Work Calendar">
             </div>
             <div class="form-group">
-                <label for="fCalUrl">ICS URL</label>
+                <label>Source Type</label>
+                <div style="display:flex;gap:var(--sp-3);margin-top:var(--sp-2);">
+                    <label style="display:flex;align-items:center;gap:var(--sp-1);font-weight:400;cursor:pointer;">
+                        <input type="radio" name="fCalSourceType" value="ics" checked onchange="toggleCalDAVFields(false)">
+                        ICS URL
+                    </label>
+                    <label style="display:flex;align-items:center;gap:var(--sp-1);font-weight:400;cursor:pointer;">
+                        <input type="radio" name="fCalSourceType" value="caldav" onchange="toggleCalDAVFields(true)">
+                        CalDAV Account
+                    </label>
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="fCalUrl" id="fCalUrlLabel">ICS URL</label>
                 <input type="url" id="fCalUrl" required placeholder="https://calendar.google.com/...">
-                <small>Public ICS/iCal subscription URL</small>
+                <small id="fCalUrlHint">Public ICS/iCal URL (supports http://, https://, webcal://)</small>
+            </div>
+            <div id="caldavFieldsGroup" style="display:none;">
+                <div class="form-group">
+                    <label for="fCalDAVUsername">CalDAV Username</label>
+                    <input type="text" id="fCalDAVUsername" placeholder="username@example.com">
+                </div>
+                <div class="form-group">
+                    <label for="fCalDAVPassword">CalDAV Password</label>
+                    <input type="password" id="fCalDAVPassword" placeholder="Password or app-specific password">
+                    <small>Password is stored encrypted in the config file</small>
+                </div>
             </div>
             <div class="form-group">
                 <div class="checkbox-row">
@@ -173,60 +202,17 @@
     });
 
     loadData();
-    checkPasswordStatus();
 
     async function checkPasswordStatus() {
-        try {
-            // Check if we can reach the login page (it redirects to / if no password)
-            const res = await fetch('/login', { redirect: 'manual' });
-            // If there's a password set, show the status
-            if (res.type === 'opaqueredirect' || res.redirected) {
-                document.getElementById('pwStatus').textContent = 'No password set. The app is publicly accessible.';
-                document.getElementById('btnRemovePw').style.display = 'none';
-                document.getElementById('logoutLink').style.display = 'none';
-            } else {
-                const html = await res.text();
-                if (html.includes('Enter the family password')) {
-                    document.getElementById('pwStatus').innerHTML = '&#9989; Password is set. The app is protected.';
-                    document.getElementById('btnRemovePw').style.display = '';
-                    document.getElementById('logoutLink').style.display = '';
-                } else {
-                    document.getElementById('pwStatus').textContent = 'No password set. The app is publicly accessible.';
-                    document.getElementById('btnRemovePw').style.display = 'none';
-                    document.getElementById('logoutLink').style.display = 'none';
-                }
-            }
-        } catch {
-            document.getElementById('pwStatus').textContent = 'No password set. The app is publicly accessible.';
-        }
+        // Authentication removed - this function is now a no-op
     }
 
     window.setPassword = async function() {
-        const pw = document.getElementById('fPassword').value;
-        if (!pw || pw.length < 4) { toast('Password must be at least 4 characters', 'error'); return; }
-        try {
-            const res = await fetch('/api/admin/set-password', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ password: pw })
-            });
-            const r = await res.json();
-            if (r.success) {
-                toast('Password set!', 'success');
-                document.getElementById('fPassword').value = '';
-                checkPasswordStatus();
-            } else toast(r.error, 'error');
-        } catch { toast('Failed to set password', 'error'); }
+        // Authentication removed - this function is now a no-op
     };
 
     window.removePassword = async function() {
-        if (!confirm('Remove password? The app will be publicly accessible.')) return;
-        try {
-            const res = await fetch('/api/admin/remove-password', { method: 'POST' });
-            const r = await res.json();
-            if (r.success) { toast('Password removed', 'success'); checkPasswordStatus(); }
-            else toast(r.error, 'error');
-        } catch { toast('Failed to remove password', 'error'); }
+        // Authentication removed - this function is now a no-op
     };
 
     async function loadData() {
@@ -296,6 +282,15 @@
                 m.calendars.forEach((cal, idx) => {
                     html += `<div class="cal-row">`;
                     html += `<div class="cal-info"><span class="cal-name">${esc(cal.name)}</span> `;
+                    
+                    // Source type badge
+                    if (cal.source_type === 'caldav') {
+                        html += '<span class="badge" style="background:#0078d4;color:white;">CalDAV</span> ';
+                    } else {
+                        html += '<span class="badge" style="background:var(--bg-card);color:var(--text-muted);border:1px solid var(--border);">ICS</span> ';
+                    }
+                    
+                    // Privacy badge
                     html += cal.show_details
                         ? '<span class="badge badge-details">Details shown</span>'
                         : `<span class="badge badge-privacy">Privacy mode</span> <span class="badge" style="background:var(--bg-card);color:var(--text-muted);border:1px solid var(--border);">${esc(cal.busy_text || 'Busy')}</span>`;
@@ -347,7 +342,57 @@
         document.getElementById('fCalDetails').checked = true;
         document.getElementById('busyTextGroup').style.display = 'none';
         document.getElementById('fCalBusyText').value = 'Busy';
+        document.querySelector('input[name="fCalSourceType"][value="ics"]').checked = true;
+        document.getElementById('fCalDAVUsername').value = '';
+        document.getElementById('fCalDAVPassword').value = '';
+        toggleCalDAVFields(false);
         openModal('modalAddCal');
+    };
+
+    window.toggleCalDAVFields = function(isCalDAV) {
+        const caldavGroup = document.getElementById('caldavFieldsGroup');
+        const urlLabel = document.getElementById('fCalUrlLabel');
+        const urlHint = document.getElementById('fCalUrlHint');
+        const urlInput = document.getElementById('fCalUrl');
+        const usernameInput = document.getElementById('fCalDAVUsername');
+        const passwordInput = document.getElementById('fCalDAVPassword');
+        
+        if (isCalDAV) {
+            caldavGroup.style.display = 'block';
+            urlLabel.textContent = 'CalDAV Server URL';
+            urlHint.textContent = 'CalDAV server URL (e.g., https://caldav.example.com/)';
+            urlInput.placeholder = 'https://caldav.example.com/';
+            usernameInput.required = true;
+            passwordInput.required = true;
+        } else {
+            caldavGroup.style.display = 'none';
+            urlLabel.textContent = 'ICS URL';
+            urlHint.textContent = 'Public ICS/iCal URL (supports http://, https://, webcal://)';
+            urlInput.placeholder = 'https://calendar.google.com/... or webcal://...';
+            usernameInput.required = false;
+            passwordInput.required = false;
+        }
+    };
+
+    window.toggleEditCalDAVFields = function(isCalDAV) {
+        const caldavGroup = document.getElementById('editCaldavFieldsGroup');
+        const urlLabel = document.getElementById('fEditCalUrlLabel');
+        const urlHint = document.getElementById('fEditCalUrlHint');
+        const urlInput = document.getElementById('fEditCalUrl');
+        const usernameInput = document.getElementById('fEditCalDAVUsername');
+        const passwordInput = document.getElementById('fEditCalDAVPassword');
+        
+        if (isCalDAV) {
+            caldavGroup.style.display = 'block';
+            urlLabel.textContent = 'CalDAV Server URL';
+            urlHint.textContent = 'CalDAV server URL (e.g., https://caldav.example.com/)';
+            urlInput.placeholder = 'https://caldav.example.com/';
+        } else {
+            caldavGroup.style.display = 'none';
+            urlLabel.textContent = 'ICS URL';
+            urlHint.textContent = 'Public ICS/iCal URL (supports http://, https://, webcal://)';
+            urlInput.placeholder = 'https://calendar.google.com/... or webcal://...';
+        }
     };
 
     async function addCalendar(e) {
@@ -357,11 +402,23 @@
         const url = document.getElementById('fCalUrl').value.trim();
         const show_details = document.getElementById('fCalDetails').checked;
         const busy_text = document.getElementById('fCalBusyText').value.trim() || 'Busy';
+        const source_type = document.querySelector('input[name="fCalSourceType"]:checked').value;
+        const caldav_username = document.getElementById('fCalDAVUsername').value.trim();
+        const caldav_password = document.getElementById('fCalDAVPassword').value.trim();
+        
         try {
             const res = await fetch(`/api/admin/members/${encodeURIComponent(mid)}/calendars`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name, url, show_details, busy_text })
+                body: JSON.stringify({ 
+                    name, 
+                    url, 
+                    show_details, 
+                    busy_text,
+                    source_type,
+                    caldav_username,
+                    caldav_password
+                })
             });
             const r = await res.json();
             if (r.success) { toast(r.message, 'success'); closeModal('modalAddCal'); loadData(); }
@@ -471,6 +528,16 @@
         document.getElementById('fEditCalDetails').checked = cal.show_details;
         document.getElementById('editBusyTextGroup').style.display = cal.show_details ? 'none' : 'block';
         document.getElementById('fEditCalBusyText').value = cal.busy_text || 'Busy';
+        
+        // Set source type
+        const sourceType = cal.source_type || 'ics';
+        document.querySelector(`input[name="fEditCalSourceType"][value="${sourceType}"]`).checked = true;
+        
+        // Set CalDAV fields
+        document.getElementById('fEditCalDAVUsername').value = cal.caldav_username || '';
+        document.getElementById('fEditCalDAVPassword').value = ''; // Don't show existing password
+        
+        toggleEditCalDAVFields(sourceType === 'caldav');
         openModal('modalEditCal');
     };
 
@@ -482,11 +549,21 @@
         const url = document.getElementById('fEditCalUrl').value.trim();
         const show_details = document.getElementById('fEditCalDetails').checked;
         const busy_text = document.getElementById('fEditCalBusyText').value.trim() || 'Busy';
+        const source_type = document.querySelector('input[name="fEditCalSourceType"]:checked').value;
+        const caldav_username = document.getElementById('fEditCalDAVUsername').value.trim();
+        const caldav_password = document.getElementById('fEditCalDAVPassword').value.trim();
+        
+        const payload = { name, url, show_details, busy_text, source_type };
+        
+        // Only include CalDAV credentials if provided
+        if (caldav_username) payload.caldav_username = caldav_username;
+        if (caldav_password) payload.caldav_password = caldav_password;
+        
         try {
             const res = await fetch(`/api/admin/members/${encodeURIComponent(mid)}/calendars/${idx}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name, url, show_details, busy_text })
+                body: JSON.stringify(payload)
             });
             const r = await res.json();
             if (r.success) { toast('Calendar updated', 'success'); closeModal('modalEditCal'); loadData(); }
