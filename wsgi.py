@@ -1,8 +1,7 @@
 """
-WSGI entry point for PythonAnywhere (and other WSGI hosts like gunicorn).
+WSGI entry point for production deployment (gunicorn, PythonAnywhere, etc.).
 
-PythonAnywhere expects a module-level `application` variable.
-Gunicorn usage:  gunicorn wsgi:application
+Usage:  gunicorn wsgi:application -b 127.0.0.1:8000 -w 2
 """
 import os
 import sys

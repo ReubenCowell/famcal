@@ -851,7 +851,7 @@ def create_app(manager: FamilyCalendarManager, fetch_timeout: int) -> Flask:
 def make_app_from_env() -> Flask:
     """
     Create a Flask app using environment variables for configuration.
-    Used by WSGI servers (PythonAnywhere, gunicorn, etc.).
+    Used by WSGI servers (gunicorn, PythonAnywhere, etc.).
     """
     config_path = Path(os.getenv("FAMILY_CONFIG", DEFAULT_CONFIG_FILE)).resolve()
     fetch_timeout = int(os.getenv("FETCH_TIMEOUT_SECONDS", "30"))
