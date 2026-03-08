@@ -134,6 +134,9 @@
     // Search state
     let searchTerm = '';
 
+    // Monday-start helper: getDay() gives 0=Sun..6=Sat; this returns 0=Mon..6=Sun
+    function mondayOffset(d) { return (d.getDay() + 6) % 7; }
+
     // Auto-refresh state
     let refreshTimerId = null;
     let lastEventsHash = '';
@@ -331,7 +334,7 @@
     function updateMonthLabel() {
         if (currentView === 'week') {
             const weekStart = new Date(viewDate);
-            weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+            weekStart.setDate(weekStart.getDate() - mondayOffset(weekStart));
             const weekEnd = new Date(weekStart);
             weekEnd.setDate(weekEnd.getDate() + 6);
             const opts = { month: 'short', day: 'numeric' };
@@ -346,7 +349,7 @@
         let gridStart, gridEnd;
         if (currentView === 'week') {
             gridStart = new Date(viewDate);
-            gridStart.setDate(gridStart.getDate() - gridStart.getDay());
+            gridStart.setDate(gridStart.getDate() - mondayOffset(gridStart));
             gridEnd = new Date(gridStart);
             gridEnd.setDate(gridEnd.getDate() + 7);
         } else {
@@ -354,9 +357,9 @@
             const first = new Date(y, m, 1);
             const last = new Date(y, m + 1, 0);
             gridStart = new Date(first);
-            gridStart.setDate(gridStart.getDate() - gridStart.getDay());
+            gridStart.setDate(gridStart.getDate() - mondayOffset(gridStart));
             gridEnd = new Date(last);
-            gridEnd.setDate(gridEnd.getDate() + (6 - gridEnd.getDay()) + 1);
+            gridEnd.setDate(gridEnd.getDate() + (6 - mondayOffset(gridEnd)) + 1);
         }
 
         const startISO = dateToISO(gridStart);
@@ -432,9 +435,9 @@
         // Collect weeks
         const weeks = [];
         const cursor = new Date(first);
-        cursor.setDate(cursor.getDate() - cursor.getDay());
+        cursor.setDate(cursor.getDate() - mondayOffset(cursor));
         let currentWeek = [];
-        while (cursor <= last || cursor.getDay() !== 0) {
+        while (cursor <= last || cursor.getDay() !== 1) {
             currentWeek.push(new Date(cursor));
             if (currentWeek.length === 7) {
                 weeks.push(currentWeek);
@@ -453,7 +456,7 @@
         });
 
         let html = '';
-        const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+        const days = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
         days.forEach(d => { html += `<div class="day-header">${d}</div>`; });
 
         weeks.forEach(weekDays => {
@@ -726,7 +729,7 @@
         const today = new Date();
         const todayStr = dateToISO(today);
         const weekStart = new Date(viewDate);
-        weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+        weekStart.setDate(weekStart.getDate() - mondayOffset(weekStart));
         const filtered = getFilteredEvents();
         const dayMap = buildDayMap(filtered);
 

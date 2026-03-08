@@ -80,6 +80,40 @@
     </div>
 </div>
 
+<!-- Edit Calendar Modal -->
+<div class="modal-overlay" id="modalEditCal">
+    <div class="modal-box">
+        <h2>Edit Calendar</h2>
+        <form id="formEditCal">
+            <input type="hidden" id="fEditCalMemberId">
+            <input type="hidden" id="fEditCalIndex">
+            <div class="form-group">
+                <label for="fEditCalName">Calendar Name</label>
+                <input type="text" id="fEditCalName" required placeholder="e.g. Work Calendar">
+            </div>
+            <div class="form-group">
+                <label for="fEditCalUrl">ICS URL</label>
+                <input type="url" id="fEditCalUrl" required placeholder="https://calendar.google.com/...">
+                <small>Public ICS/iCal subscription URL</small>
+            </div>
+            <div class="form-group">
+                <div class="checkbox-row">
+                    <input type="checkbox" id="fEditCalDetails" checked onchange="document.getElementById('editBusyTextGroup').style.display = this.checked ? 'none' : 'block'">
+                    <label for="fEditCalDetails" style="margin-bottom:0;font-weight:400;">Show event details</label>
+                </div>
+            </div>
+            <div class="form-group" id="editBusyTextGroup" style="display:none;">
+                <label for="fEditCalBusyText">Custom busy text</label>
+                <input type="text" id="fEditCalBusyText" placeholder="Busy" value="Busy">
+            </div>
+            <div class="form-buttons">
+                <button type="button" class="btn" onclick="closeModal('modalEditCal')">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save Changes</button>
+            </div>
+        </form>
+    </div>
+</div>
+
 <!-- Add Calendar Modal -->
 <div class="modal-overlay" id="modalAddCal">
     <div class="modal-box">
@@ -131,6 +165,7 @@
     document.getElementById('btnRefreshAll').onclick = refreshAll;
     document.getElementById('formAddMember').onsubmit = addMember;
     document.getElementById('formAddCal').onsubmit = addCalendar;
+    document.getElementById('formEditCal').onsubmit = saveEditCalendar;
 
     // Close modals on overlay click
     document.querySelectorAll('.modal-overlay').forEach(el => {
@@ -223,8 +258,7 @@
             html += `<div class="member-card">`;
             html += `<div class="member-card-header">`;
             html += `<div class="member-title"><span class="color-chip" style="background:${esc(m.color)}"></span><div><h2>${esc(m.name)}</h2><div class="feed-link">${esc(m.feed_url)}</div></div></div>`;
-            html += `<div style="display:flex;gap:8px;align-items:center;">`;
-            html += `<button class="btn btn-sm" onclick="downloadMemberICS('${esc(m.id)}','${esc(m.name)}')" title="Download .ics file">&#11015; Download</button>`;
+            html += `<div style="display:flex;gap:8px;align-items:center;">`;            html += `<button class="btn btn-sm" onclick="editMemberName('${esc(m.id)}','${esc(m.name)}')" title="Edit name">&#9998; Edit</button>`;            html += `<button class="btn btn-sm" onclick="downloadMemberICS('${esc(m.id)}','${esc(m.name)}')" title="Download .ics file">&#11015; Download</button>`;
             html += `<button class="btn btn-sm" onclick="refreshMember('${esc(m.id)}')">&#8635; Refresh</button>`;
             html += `<button class="btn btn-danger btn-sm" onclick="deleteMember('${esc(m.id)}','${esc(m.name)}')">Delete</button>`;
             html += `</div></div>`;
@@ -266,8 +300,7 @@
                         ? '<span class="badge badge-details">Details shown</span>'
                         : `<span class="badge badge-privacy">Privacy mode</span> <span class="badge" style="background:var(--bg-card);color:var(--text-muted);border:1px solid var(--border);">${esc(cal.busy_text || 'Busy')}</span>`;
                     html += `<div class="cal-url" title="${esc(cal.url)}">${cal.has_url ? esc(cal.url) : '<em>No URL</em>'}</div></div>`;
-                    html += `<div class="cal-actions">`;
-                    if (!cal.show_details) {
+                    html += `<div class="cal-actions">`;                    html += `<button class="btn btn-sm" onclick="editCalendar('${esc(m.id)}',${idx})" title="Edit calendar">&#9998; Edit</button>`;                    if (!cal.show_details) {
                         html += `<button class="btn btn-sm" onclick="editBusyText('${esc(m.id)}',${idx},'${esc(cal.busy_text || 'Busy')}')">&#9998; Busy text</button>`;
                     }
                     html += `<button class="btn btn-sm" onclick="togglePrivacy('${esc(m.id)}',${idx},${!cal.show_details})">${cal.show_details ? '&#128274; Hide' : '&#128275; Show'}</button>`;
@@ -411,6 +444,55 @@
             else toast(r.error, 'error');
         } catch { toast('Failed to update color', 'error'); }
     };
+
+    window.editMemberName = async function(mid, currentName) {
+        const name = prompt('New display name:', currentName);
+        if (name === null || !name.trim()) return;
+        try {
+            const res = await fetch(`/api/admin/members/${encodeURIComponent(mid)}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: name.trim() })
+            });
+            const r = await res.json();
+            if (r.success) { toast('Name updated', 'success'); loadData(); }
+            else toast(r.error, 'error');
+        } catch { toast('Failed to update name', 'error'); }
+    };
+
+    window.editCalendar = async function(mid, idx) {
+        const member = members.find(m => m.id === mid);
+        if (!member || !member.calendars[idx]) return;
+        const cal = member.calendars[idx];
+        document.getElementById('fEditCalMemberId').value = mid;
+        document.getElementById('fEditCalIndex').value = idx;
+        document.getElementById('fEditCalName').value = cal.name;
+        document.getElementById('fEditCalUrl').value = cal.url || '';
+        document.getElementById('fEditCalDetails').checked = cal.show_details;
+        document.getElementById('editBusyTextGroup').style.display = cal.show_details ? 'none' : 'block';
+        document.getElementById('fEditCalBusyText').value = cal.busy_text || 'Busy';
+        openModal('modalEditCal');
+    };
+
+    async function saveEditCalendar(e) {
+        e.preventDefault();
+        const mid = document.getElementById('fEditCalMemberId').value;
+        const idx = parseInt(document.getElementById('fEditCalIndex').value);
+        const name = document.getElementById('fEditCalName').value.trim();
+        const url = document.getElementById('fEditCalUrl').value.trim();
+        const show_details = document.getElementById('fEditCalDetails').checked;
+        const busy_text = document.getElementById('fEditCalBusyText').value.trim() || 'Busy';
+        try {
+            const res = await fetch(`/api/admin/members/${encodeURIComponent(mid)}/calendars/${idx}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, url, show_details, busy_text })
+            });
+            const r = await res.json();
+            if (r.success) { toast('Calendar updated', 'success'); closeModal('modalEditCal'); loadData(); }
+            else toast(r.error, 'error');
+        } catch { toast('Failed to update calendar', 'error'); }
+    }
 
     window.downloadMemberICS = function(mid) {
         window.location.href = '/' + encodeURIComponent(mid) + '/calendar.ics?download=1';

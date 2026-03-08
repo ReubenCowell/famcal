@@ -1,5 +1,6 @@
 /* ===== Design Tokens ===== */
 :root {
+    color-scheme: light;
     --primary: #0078d4;
     --primary-hover: #106ebe;
     --primary-light: #deecf9;
@@ -67,39 +68,7 @@
     --shadow-sm: 0 1.6px 3.6px rgba(0,0,0,.45), 0 .3px .9px rgba(0,0,0,.36);
     --shadow-md: 0 3.2px 7.2px rgba(0,0,0,.45), 0 .6px 1.8px rgba(0,0,0,.36);
     --shadow-lg: 0 6.4px 14.4px rgba(0,0,0,.45), 0 1.2px 3.6px rgba(0,0,0,.36);
-}
-
-@media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) {
-        --primary: #4da6ff;
-        --primary-hover: #3a8fd9;
-        --primary-light: #1a3a5c;
-        --primary-lighter: #0f2440;
-
-        --busy: #ff6b6b;
-        --busy-bg: #3d1a1a;
-        --tentative: #ffa94d;
-        --tentative-bg: #3d2e14;
-        --free: #51cf66;
-        --free-bg: #133a13;
-        --cancelled: #868e96;
-        --cancelled-bg: #2a2a2a;
-
-        --bg: #0f0f1a;
-        --surface: #1a1a2e;
-        --surface-alt: #21213b;
-        --border: #2e2e4a;
-        --border-strong: #3e3e5e;
-
-        --text: #e4e4ef;
-        --text-secondary: #a0a0b8;
-        --text-muted: #6b6b80;
-        --text-on-primary: #ffffff;
-
-        --shadow-sm: 0 1.6px 3.6px rgba(0,0,0,.45), 0 .3px .9px rgba(0,0,0,.36);
-        --shadow-md: 0 3.2px 7.2px rgba(0,0,0,.45), 0 .6px 1.8px rgba(0,0,0,.36);
-        --shadow-lg: 0 6.4px 14.4px rgba(0,0,0,.45), 0 1.2px 3.6px rgba(0,0,0,.36);
-    }
+    color-scheme: dark;
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -574,8 +543,8 @@ body {
 .alert-msg.error { background: var(--busy-bg); color: #8b1a1a; border: 1px solid var(--busy); }
 
 /* ===== Week View ===== */
-.week-grid-wrap { overflow: auto; -webkit-overflow-scrolling: touch; }
-.week-grid { min-width: 700px; }
+.week-grid-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.week-grid { width: 100%; }
 .week-header-row {
     display: grid;
     grid-template-columns: 70px repeat(7, 1fr);
@@ -909,7 +878,6 @@ mark { background: #fff3bf; color: #333; border-radius: 2px; padding: 0 1px; }
     .month-grid .day-cell { min-height: 70px; }
     .toolbar .month-label { min-width: auto; font-size: 1rem; }
     .week-body { max-height: calc(100vh - 220px); }
-    .week-grid { min-width: 600px; }
     .week-time-gutter { width: auto; }
     .week-header-row,
     .week-allday-row,
@@ -936,7 +904,6 @@ mark { background: #fff3bf; color: #333; border-radius: 2px; padding: 0 1px; }
     .cal-row .cal-actions { width: 100%; justify-content: flex-end; }
     .view-switcher button { font-size: .75rem; padding: var(--sp-1) var(--sp-2); }
     .btn-icon { width: 28px; height: 28px; font-size: .875rem; }
-    .week-grid { min-width: 500px; }
     .week-header-row,
     .week-allday-row,
     .week-row { grid-template-columns: 44px repeat(7, 1fr); }
