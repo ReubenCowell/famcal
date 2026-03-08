@@ -139,6 +139,8 @@
     let members = [];
     let statuses = {};
     let refreshInterval = null;
+    let loadingCount = 0;  // Track concurrent load operations
+    let isLoadingData = false;  // Prevent concurrent data loads
 
     const $container = document.getElementById('membersContainer');
     const $empty = document.getElementById('adminEmpty');
@@ -175,31 +177,67 @@
 
     async function fetchStatus() {
         // Fetch just the status without reloading member list to avoid flickering
+        // Uses last known data if fetch fails (data consistency)
         try {
             const res = await fetch('/api/status');
-            statuses = await res.json() || {};
+            if (!res.ok) {
+                console.warn(`Status fetch failed: ${res.status}`);
+                return;  // Keep previous status on error
+            }
+            const newStatuses = await res.json() || {};
+            // Merge with existing to preserve any lost data
+            statuses = { ...statuses, ...newStatuses };
             renderMembers();
         } catch (e) {
-            // Silently ignore status fetch failures
+            console.warn(`Status fetch error: ${e.message}`);
+            // Silently ignore status fetch failures - keep rendering with current state
         }
     }
 
     async function loadData() {
+        // Prevent concurrent loads to avoid race conditions
+        if (isLoadingData) {
+            console.debug('Load already in progress, skipping');
+            return;
+        }
+        
+        isLoadingData = true;
         try {
-            const [mRes, sRes] = await Promise.all([fetch('/api/members'), fetch('/api/status')]);
-            const mData = await mRes.json();
-            const sData = await sRes.json();
+            const promises = [
+                fetch('/api/members').then(r => {
+                    if (!r.ok) throw new Error(`Members fetch failed: ${r.status}`);
+                    return r.json();
+                }),
+                fetch('/api/status').then(r => {
+                    if (!r.ok) throw new Error(`Status fetch failed: ${r.status}`);
+                    return r.json();
+                })
+            ];
+            
+            const [mData, sData] = await Promise.all(promises);
+            
+            // Successfully loaded new data - replace old data completely
             members = mData.members || [];
             statuses = sData || {};
+            
+            console.debug(`Loaded ${members.length} members with status data`);
         } catch (e) {
-            members = [];
-            statuses = {};
+            // On error, preserve existing data rather than clearing it
+            // This prevents UI flickering where data disappears
+            console.error(`Data load error: ${e.message} - keeping previous state`);
+            if (members.length === 0) {
+                // Only show empty state if we truly have no data
+                toast(`Failed to load data: ${e.message}`, 'error');
+            }
+            // Otherwise render with existing data
+        } finally {
+            isLoadingData = false;
+            renderMembers();
         }
-        renderMembers();
     }
 
     function renderMembers() {
-        if (members.length === 0) {
+        if (!members || members.length === 0) {
             $empty.style.display = '';
             // Remove all cards
             $container.querySelectorAll('.member-card').forEach(el => el.remove());
@@ -209,14 +247,22 @@
 
         let html = '';
         members.forEach(m => {
+            // Validate member data
+            if (!m.id || !m.name) {
+                console.warn('Skipping invalid member data:', m);
+                return;
+            }
+            
             const st = statuses[m.id] || {};
-            const isLoading = st.configured_sources > st.successful_sources && !st.last_error;
+            const isLoading = (st.configured_sources || 0) > (st.successful_sources || 0) && !st.last_error;
             const isSynced = st.last_refresh_utc !== null;
             
             html += `<div class="member-card">`;
             html += `<div class="member-card-header">`;
             html += `<div class="member-title"><span class="color-chip" style="background:${esc(m.color)}"></span><div><h2>${esc(m.name)}</h2><div class="feed-link">${esc(m.feed_url)}</div></div></div>`;
-            html += `<div style="display:flex;gap:8px;align-items:center;">`;            html += `<button class="btn btn-sm" onclick="editMemberName('${esc(m.id)}','${esc(m.name)}')" title="Edit name">&#9998; Edit</button>`;            html += `<button class="btn btn-sm" onclick="downloadMemberICS('${esc(m.id)}','${esc(m.name)}')" title="Download .ics file">&#11015; Download</button>`;
+            html += `<div style="display:flex;gap:8px;align-items:center;">`;            
+            html += `<button class="btn btn-sm" onclick="editMemberName('${esc(m.id)}','${esc(m.name)}')" title="Edit name">&#9998; Edit</button>`;            
+            html += `<button class="btn btn-sm" onclick="downloadMemberICS('${esc(m.id)}','${esc(m.name)}')" title="Download .ics file">&#11015; Download</button>`;
             html += `<button class="btn btn-sm" onclick="refreshMember('${esc(m.id)}')">&#8635; Refresh</button>`;
             html += `<button class="btn btn-danger btn-sm" onclick="deleteMember('${esc(m.id)}','${esc(m.name)}')">Delete</button>`;
             html += `</div></div>`;
@@ -249,13 +295,19 @@
 
             // Calendar list
             html += `<div class="member-card-body">`;
-            html += `<div class="section-label"><strong>Calendars (${m.calendars.length})</strong>`;
+            html += `<div class="section-label"><strong>Calendars (${m.calendars ? m.calendars.length : 0})</strong>`;
             html += `<button class="btn btn-sm btn-primary" onclick="openAddCalModal('${esc(m.id)}')">+ Add Calendar</button></div>`;
 
-            if (m.calendars.length === 0) {
+            if (!m.calendars || m.calendars.length === 0) {
                 html += `<div style="color:var(--text-muted);font-style:italic;padding:12px 0;">No calendars added yet.</div>`;
             } else {
                 m.calendars.forEach((cal, idx) => {
+                    // Validate calendar data
+                    if (!cal.name) {
+                        console.warn('Skipping invalid calendar data:', cal);
+                        return;
+                    }
+                    
                     html += `<div class="cal-row">`;
                     html += `<div class="cal-info"><span class="cal-name">${esc(cal.name)}</span> `;
                     
@@ -274,7 +326,9 @@
                         html += `<div class="cal-url" style="color:var(--busy);font-style:italic;" title="No valid URL set"><strong>⚠ No URL configured</strong></div>`;
                     }
                     html += `</div>`;
-                    html += `<div class="cal-actions">`;                    html += `<button class="btn btn-sm" onclick="editCalendar('${esc(m.id)}',${idx})" title="Edit calendar">&#9998; Edit</button>`;                    if (!cal.show_details) {
+                    html += `<div class="cal-actions">`;                    
+                    html += `<button class="btn btn-sm" onclick="editCalendar('${esc(m.id)}',${idx})" title="Edit calendar">&#9998; Edit</button>`;                    
+                    if (!cal.show_details) {
                         html += `<button class="btn btn-sm" onclick="editBusyText('${esc(m.id)}',${idx},'${esc(cal.busy_text || 'Busy')}')">&#9998; Busy text</button>`;
                     }
                     html += `<button class="btn btn-sm" onclick="togglePrivacy('${esc(m.id)}',${idx},${!cal.show_details})">${cal.show_details ? '&#128274; Hide' : '&#128275; Show'}</button>`;
@@ -292,6 +346,12 @@
         e.preventDefault();
         const id = document.getElementById('fMemberId').value.trim().toLowerCase();
         const name = document.getElementById('fMemberName').value.trim();
+        
+        if (!id || !name) {
+            toast('Member ID and name are required', 'error');
+            return;
+        }
+        
         try {
             const res = await fetch('/api/admin/members', {
                 method: 'POST',
@@ -299,9 +359,24 @@
                 body: JSON.stringify({ id, name })
             });
             const r = await res.json();
-            if (r.success) { toast(r.message, 'success'); closeModal('modalAddMember'); loadData(); }
-            else toast(r.error, 'error');
-        } catch { toast('Failed to add member', 'error'); }
+            if (r.success) { 
+                toast(r.message, 'success'); 
+                document.getElementById('fMemberId').value = '';
+                document.getElementById('fMemberName').value = '';
+                closeModal('modalAddMember');
+                // Wait for server to persist to disk before reload
+                await new Promise(resolve => setTimeout(resolve, 300));
+                await loadData();
+            }
+            else {
+                toast('Error: ' + (r.error || 'Unknown error'), 'error');
+                console.error('Add member failed:', r);
+            }
+        } catch (e) { 
+            const errMsg = e.message || 'Unknown error';
+            toast('Failed to add member: ' + errMsg, 'error');
+            console.error('Add member exception:', e);
+        }
     }
 
     window.deleteMember = async function(id, name) {
@@ -309,9 +384,19 @@
         try {
             const res = await fetch(`/api/admin/members/${encodeURIComponent(id)}`, { method: 'DELETE' });
             const r = await res.json();
-            if (r.success) { toast(r.message, 'success'); loadData(); }
-            else toast(r.error, 'error');
-        } catch { toast('Failed to delete', 'error'); }
+            if (r.success) { 
+                toast(r.message, 'success');
+                await new Promise(resolve => setTimeout(resolve, 300));
+                await loadData();
+            }
+            else {
+                toast('Error: ' + (r.error || 'Unknown error'), 'error');
+                console.error('Delete member failed:', r);
+            }
+        } catch (e) { 
+            toast('Failed to delete: ' + (e.message || 'Unknown error'), 'error');
+            console.error('Delete member exception:', e);
+        }
     };
 
     window.openAddCalModal = function(mid) {
@@ -338,6 +423,11 @@
             return;
         }
         
+        if (!name) {
+            toast('Please enter a calendar name', 'error');
+            return;
+        }
+        
         const url_lower = url.toLowerCase();
         if (!url_lower.startsWith('http://') && !url_lower.startsWith('https://') && !url_lower.startsWith('webcal://') && !url_lower.startsWith('webcals://')) {
             toast('URL must start with http://, https://, webcal://, or webcals://', 'error');
@@ -345,6 +435,7 @@
         }
         
         try {
+            toast('Adding calendar and refreshing...', 'success');
             const res = await fetch(`/api/admin/members/${encodeURIComponent(mid)}/calendars`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -357,19 +448,48 @@
                 })
             });
             const r = await res.json();
-            if (r.success) { toast(r.message, 'success'); closeModal('modalAddCal'); loadData(); }
-            else toast(r.error, 'error');
-        } catch { toast('Failed to add calendar', 'error'); }
+            if (r.success) { 
+                toast(r.message, 'success'); 
+                // Clear form
+                document.getElementById('fCalName').value = '';
+                document.getElementById('fCalUrl').value = '';
+                document.getElementById('fCalDetails').checked = true;
+                document.getElementById('fCalBusyText').value = 'Busy';
+                closeModal('modalAddCal');
+                // Server already refreshed - wait then reload
+                await new Promise(resolve => setTimeout(resolve, 300));
+                await loadData();
+            }
+            else {
+                toast('Error: ' + (r.error || 'Unknown error'), 'error');
+                console.error('Add calendar failed:', r);
+            }
+        } catch (e) { 
+            const errMsg = e.message || 'Unknown error';
+            toast('Failed to add calendar: ' + errMsg, 'error');
+            console.error('Add calendar exception:', e);
+        }
     }
 
     window.deleteCal = async function(mid, idx, name) {
         if (!confirm(`Delete calendar "${name}"?`)) return;
         try {
+            toast('Deleting calendar...', 'success');
             const res = await fetch(`/api/admin/members/${encodeURIComponent(mid)}/calendars/${idx}`, { method: 'DELETE' });
             const r = await res.json();
-            if (r.success) { toast(r.message, 'success'); loadData(); }
-            else toast(r.error, 'error');
-        } catch { toast('Failed to delete calendar', 'error'); }
+            if (r.success) { 
+                toast(r.message, 'success');
+                await new Promise(resolve => setTimeout(resolve, 300));
+                await loadData();
+            }
+            else {
+                toast('Error: ' + (r.error || 'Unknown error'), 'error');
+                console.error('Delete calendar failed:', r);
+            }
+        } catch (e) { 
+            toast('Failed to delete calendar: ' + (e.message || 'Unknown error'), 'error');
+            console.error('Delete calendar exception:', e);
+        }
     };
 
     window.togglePrivacy = async function(mid, idx, newVal) {
@@ -380,9 +500,15 @@
                 body: JSON.stringify({ show_details: newVal })
             });
             const r = await res.json();
-            if (r.success) { toast('Privacy updated', 'success'); loadData(); }
+            if (r.success) { 
+                toast('Privacy updated', 'success');
+                await new Promise(resolve => setTimeout(resolve, 100));
+                await loadData();
+            }
             else toast(r.error, 'error');
-        } catch { toast('Failed to update', 'error'); }
+        } catch (e) { 
+            toast('Failed to update: ' + (e.message || 'Unknown error'), 'error'); 
+        }
     };
 
     window.editBusyText = async function(mid, idx, current) {
@@ -395,30 +521,58 @@
                 body: JSON.stringify({ busy_text: text || 'Busy' })
             });
             const r = await res.json();
-            if (r.success) { toast('Busy text updated', 'success'); loadData(); }
+            if (r.success) { 
+                toast('Busy text updated', 'success');
+                await new Promise(resolve => setTimeout(resolve, 100));
+                await loadData();
+            }
             else toast(r.error, 'error');
-        } catch { toast('Failed to update', 'error'); }
+        } catch (e) { 
+            toast('Failed to update: ' + (e.message || 'Unknown error'), 'error'); 
+        }
     };
 
     window.refreshMember = async function(mid) {
-        toast('Refreshing...', 'success');
+        toast('Refreshing calendar...', 'success');
         try {
-            // Use the full refresh endpoint (it's the simplest approach)
             const res = await fetch('/api/admin/refresh', { method: 'POST' });
             const r = await res.json();
-            if (r.success) { toast('Refreshed', 'success'); loadData(); }
-            else toast(r.error, 'error');
-        } catch { toast('Failed', 'error'); }
+            if (r.success) { 
+                toast('Calendar refreshed', 'success');
+                await new Promise(resolve => setTimeout(resolve, 300));
+                await loadData();
+            }
+            else {
+                toast('Error: ' + (r.error || 'Unknown error'), 'error');
+                console.error('Refresh failed:', r);
+            }
+        } catch (e) { 
+            toast('Failed: ' + (e.message || 'Unknown error'), 'error');
+            console.error('Refresh exception:', e);
+        }
     };
 
     async function refreshAll() {
         toast('Refreshing all calendars...', 'success');
         try {
             const res = await fetch('/api/admin/refresh', { method: 'POST' });
+            if (!res.ok) {
+                throw new Error(`Server returned ${res.status}`);
+            }
             const r = await res.json();
-            if (r.success) { toast('All calendars refreshed', 'success'); loadData(); }
-            else toast(r.error, 'error');
-        } catch { toast('Failed', 'error'); }
+            if (r.success) { 
+                toast('All calendars refreshed', 'success');
+                await new Promise(resolve => setTimeout(resolve, 300));
+                await loadData();
+            }
+            else {
+                toast('Error: ' + (r.error || 'Unknown error'), 'error');
+                console.error('Refresh failed:', r);
+            }
+        } catch (e) { 
+            toast('Refresh failed: ' + (e.message || 'Unknown error'), 'error');
+            console.error('Refresh exception:', e);
+        }
     }
 
     function openModal(id) { document.getElementById(id).classList.add('active'); }
@@ -433,9 +587,19 @@
                 body: JSON.stringify({ color: color })
             });
             const r = await res.json();
-            if (r.success) { toast('Color updated', 'success'); loadData(); }
-            else toast(r.error, 'error');
-        } catch { toast('Failed to update color', 'error'); }
+            if (r.success) { 
+                toast('Color updated', 'success');
+                await new Promise(resolve => setTimeout(resolve, 100));
+                await loadData();
+            }
+            else {
+                toast('Error: ' + (r.error || 'Unknown error'), 'error');
+                console.error('Update color failed:', r);
+            }
+        } catch (e) { 
+            toast('Failed to update color: ' + (e.message || 'Unknown error'), 'error');
+            console.error('Update color exception:', e);
+        }
     };
 
     window.editMemberName = async function(mid, currentName) {
@@ -448,9 +612,19 @@
                 body: JSON.stringify({ name: name.trim() })
             });
             const r = await res.json();
-            if (r.success) { toast('Name updated', 'success'); loadData(); }
-            else toast(r.error, 'error');
-        } catch { toast('Failed to update name', 'error'); }
+            if (r.success) { 
+                toast('Name updated', 'success');
+                await new Promise(resolve => setTimeout(resolve, 100));
+                await loadData();
+            }
+            else {
+                toast('Error: ' + (r.error || 'Unknown error'), 'error');
+                console.error('Update name failed:', r);
+            }
+        } catch (e) { 
+            toast('Failed to update name: ' + (e.message || 'Unknown error'), 'error');
+            console.error('Update name exception:', e);
+        }
     };
 
     window.editCalendar = async function(mid, idx) {
@@ -476,6 +650,11 @@
         const show_details = document.getElementById('fEditCalDetails').checked;
         const busy_text = document.getElementById('fEditCalBusyText').value.trim() || 'Busy';
         
+        if (!name) {
+            toast('Please enter a calendar name', 'error');
+            return;
+        }
+        
         if (!url) {
             toast('Please enter a calendar URL', 'error');
             return;
@@ -490,15 +669,27 @@
         const payload = { name, url, show_details, busy_text, source_type: 'ics' };
         
         try {
+            toast('Updating calendar and refreshing...', 'success');
             const res = await fetch(`/api/admin/members/${encodeURIComponent(mid)}/calendars/${idx}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             });
             const r = await res.json();
-            if (r.success) { toast('Calendar updated', 'success'); closeModal('modalEditCal'); loadData(); }
-            else toast(r.error, 'error');
-        } catch { toast('Failed to update calendar', 'error'); }
+            if (r.success) { 
+                toast('Calendar updated', 'success'); 
+                closeModal('modalEditCal'); 
+                await new Promise(resolve => setTimeout(resolve, 300));
+                await loadData();
+            }
+            else {
+                toast('Error: ' + (r.error || 'Unknown error'), 'error');
+                console.error('Update calendar failed:', r);
+            }
+        } catch (e) { 
+            toast('Failed to update calendar: ' + (e.message || 'Unknown error'), 'error');
+            console.error('Update calendar exception:', e);
+        }
     }
 
     window.downloadMemberICS = function(mid) {

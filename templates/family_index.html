@@ -141,7 +141,10 @@
     let refreshTimerId = null;
     let lastEventsHash = '';
     let lastRefreshTime = null;
-    let displayEvents = []; // flat array for modal references
+    let fetchInFlight = false;
+    let fetchAbortController = null;
+    let openModalEventId = null;
+    const FETCH_TIMEOUT_MS = 15000;
 
     // ===== DOM refs =====
     const $monthLabel  = document.getElementById('monthLabel');
@@ -345,7 +348,17 @@
     }
 
     async function fetchEvents(isAutoRefresh) {
-        if (activeMembers.size === 0) { events = []; render(); return; }
+        if (activeMembers.size === 0) {
+            events = [];
+            render();
+            return;
+        }
+
+        if (fetchInFlight) {
+            if (isAutoRefresh) return;
+            if (fetchAbortController) fetchAbortController.abort();
+        }
+
         let gridStart, gridEnd;
         if (currentView === 'week') {
             gridStart = new Date(viewDate);
@@ -353,7 +366,8 @@
             gridEnd = new Date(gridStart);
             gridEnd.setDate(gridEnd.getDate() + 7);
         } else {
-            const y = viewDate.getFullYear(), m = viewDate.getMonth();
+            const y = viewDate.getFullYear();
+            const m = viewDate.getMonth();
             const first = new Date(y, m, 1);
             const last = new Date(y, m + 1, 0);
             gridStart = new Date(first);
@@ -365,17 +379,43 @@
         const startISO = dateToISO(gridStart);
         const endISO = dateToISO(gridEnd);
         const ids = [...activeMembers].join(',');
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+        fetchAbortController = controller;
+        fetchInFlight = true;
 
         try {
-            const res = await fetch(`/api/events?start=${startISO}&end=${endISO}&member_ids=${encodeURIComponent(ids)}`);
-            const data = await res.json();
-            const newEvents = data.events || [];
+            const res = await fetch(
+                `/api/events?start=${startISO}&end=${endISO}&member_ids=${encodeURIComponent(ids)}`,
+                {
+                    signal: controller.signal,
+                    headers: { 'Accept': 'application/json' }
+                }
+            );
+
+            let data = null;
+            try {
+                data = await res.json();
+            } catch (_jsonErr) {
+                throw new Error('Server returned invalid calendar data.');
+            }
+
+            if (!res.ok) {
+                const message = (data && data.error) ? data.error : `Failed to refresh events (${res.status})`;
+                throw new Error(message);
+            }
+
+            if (!data || !Array.isArray(data.events)) {
+                throw new Error('Server response is missing events.');
+            }
+
+            const newEvents = data.events;
             const newHash = JSON.stringify(newEvents);
 
             if (isAutoRefresh && newHash === lastEventsHash) {
                 lastRefreshTime = new Date();
                 updateRefreshTime();
-                return; // no change
+                return;
             }
 
             lastEventsHash = newHash;
@@ -383,11 +423,21 @@
             lastRefreshTime = new Date();
             updateRefreshTime();
             render();
+            syncOpenModalToLatest();
 
             if (isAutoRefresh) showRefreshUpdated();
         } catch (e) {
-            events = [];
-            render();
+            if (e && e.name === 'AbortError') {
+                if (!isAutoRefresh) showRefreshError('Refresh timed out. Showing last known events.');
+            } else {
+                const message = (e && e.message) ? e.message : 'Refresh failed. Showing last known events.';
+                showRefreshError(message);
+                console.error('Failed to fetch events:', e);
+            }
+        } finally {
+            clearTimeout(timeoutId);
+            if (fetchAbortController === controller) fetchAbortController = null;
+            fetchInFlight = false;
         }
     }
 
@@ -408,7 +458,6 @@
     }
 
     function render() {
-        displayEvents = [];
         if (currentView === 'month') {
             renderGrid();
         } else if (currentView === 'week') {
@@ -501,11 +550,10 @@
                 weekSpanners.forEach(sp => {
                     const color = sp.ev.member_color || '#0078d4';
                     const availCls = 'availability-' + sp.ev.availability;
-                    const evIdx = displayEvents.length;
-                    displayEvents.push(sp.ev);
+                    const eventId = getEventId(sp.ev);  // Fix #2: Use event ID
                     html += `<div class="span-event ${availCls}" ` +
                         `style="grid-column:${sp.startCol}/${sp.endCol};grid-row:${sp.lane + 1};background:${esc(color)}" ` +
-                        `data-ev-idx="${evIdx}" ` +
+                        `data-event-id="${esc(eventId)}" ` +
                         `title="${esc(sp.ev.summary)}">${esc(sp.ev.summary)}</div>`;
                 });
                 html += '</div></div>';
@@ -537,11 +585,10 @@
                     const availCls = 'availability-' + ev.availability;
                     const allDayCls = ev.all_day ? ' all-day' : '';
                     const timePrefix = ev.all_day ? '' : formatShortTime(ev.start) + ' ';
-                    const evIdx = displayEvents.length;
-                    displayEvents.push(ev);
+                    const eventId = getEventId(ev);  // Fix #2: Use event ID
                     html += `<div class="day-event${allDayCls} ${availCls}" ` +
                             `style="background:${esc(color)}" ` +
-                            `data-ev-idx="${evIdx}" ` +
+                            `data-event-id="${esc(eventId)}" ` +
                             `title="${esc(ev.summary)}">${esc(timePrefix + ev.summary)}</div>`;
                 });
                 if (extra > 0) {
@@ -567,8 +614,9 @@
         $monthGrid.querySelectorAll('.day-event, .span-event').forEach(el => {
             el.onclick = (e) => {
                 e.stopPropagation();
-                const idx = parseInt(el.dataset.evIdx);
-                if (!isNaN(idx) && displayEvents[idx]) openEventModal(displayEvents[idx]);
+                const eventId = el.dataset.eventId;
+                if (!eventId) return;
+                openEventModalById(eventId);
             };
         });
     }
@@ -593,11 +641,12 @@
         }
         $dayBody.innerHTML = dayEvts.map(ev => eventCardHTML(ev)).join('');
         // Bind event card clicks to modal
-        $dayBody.querySelectorAll('.event-card[data-ev-idx]').forEach(el => {
+        $dayBody.querySelectorAll('.event-card[data-event-id]').forEach(el => {
             el.style.cursor = 'pointer';
             el.onclick = () => {
-                const idx = parseInt(el.dataset.evIdx);
-                if (!isNaN(idx) && displayEvents[idx]) openEventModal(displayEvents[idx]);
+                const eventId = el.dataset.eventId;
+                if (!eventId) return;
+                openEventModalById(eventId);
             };
         });
     }
@@ -627,11 +676,12 @@
         });
         $listView.innerHTML = html;
         // Bind event card clicks to modal
-        $listView.querySelectorAll('.event-card[data-ev-idx]').forEach(el => {
+        $listView.querySelectorAll('.event-card[data-event-id]').forEach(el => {
             el.style.cursor = 'pointer';
             el.onclick = () => {
-                const idx = parseInt(el.dataset.evIdx);
-                if (!isNaN(idx) && displayEvents[idx]) openEventModal(displayEvents[idx]);
+                const eventId = el.dataset.eventId;
+                if (!eventId) return;
+                openEventModalById(eventId);
             };
         });
     }
@@ -640,29 +690,29 @@
     function buildDayMap(evts) {
         const map = {};
         evts.forEach(ev => {
-            if (!ev.start) return;
+            const startDate = extractISODate(ev.start);
+            if (!startDate) return;
             if (!activeMembers.has(ev.member_id)) return;
-            const startDate = ev.start.substring(0, 10);
 
             if (ev.all_day && ev.end) {
-                // Span all days from start to end (exclusive)
-                const endDate = ev.end.substring(0, 10);
-                let cur = new Date(startDate + 'T00:00:00');
-                const endD = new Date(endDate + 'T00:00:00');
-                while (cur < endD) {
-                    const iso = dateToISO(cur);
-                    if (!map[iso]) map[iso] = [];
-                    map[iso].push(ev);
-                    cur.setDate(cur.getDate() + 1);
-                }
-                // If start == end for all-day, still add start
-                if (startDate === endDate) {
+                const endDate = extractISODate(ev.end);
+
+                if (!endDate || startDate >= endDate) {
                     if (!map[startDate]) map[startDate] = [];
                     if (!map[startDate].includes(ev)) map[startDate].push(ev);
+                } else {
+                    let cur = startDate;
+                    let guard = 0;
+                    while (cur < endDate && guard < 3700) {
+                        if (!map[cur]) map[cur] = [];
+                        if (!map[cur].includes(ev)) map[cur].push(ev);
+                        cur = addDaysISO(cur, 1);
+                        guard += 1;
+                    }
                 }
             } else {
                 if (!map[startDate]) map[startDate] = [];
-                map[startDate].push(ev);
+                if (!map[startDate].includes(ev)) map[startDate].push(ev);
             }
         });
         // Sort within each day: all-day first, then by start time
@@ -677,12 +727,11 @@
     }
 
     function eventCardHTML(ev) {
-        const evIdx = displayEvents.length;
-        displayEvents.push(ev);
+        const eventId = getEventId(ev);
         const color = ev.member_color || '#0078d4';
         const timeStr = ev.all_day ? 'All day' : formatTimeRange(ev.start, ev.end);
         const tentCls = ev.availability === 'tentative' ? ' avail-card-tentative' : '';
-        let html = `<div class="event-card${tentCls}" style="border-left-color:${esc(color)}" data-ev-idx="${evIdx}">`;
+        let html = `<div class="event-card${tentCls}" style="border-left-color:${esc(color)}" data-event-id="${esc(eventId)}">`;
         html += `<div class="ev-time">${esc(timeStr)} <span class="avail-badge avail-${ev.availability}">${esc(ev.availability)}</span></div>`;
         html += `<div class="ev-title"><span class="member-dot" style="background:${esc(color)}"></span>${escHL(ev.summary)}</div>`;
         if (ev.location && ev.location !== 'None' && ev.location !== '') {
@@ -763,9 +812,8 @@
             html += '<div class="week-allday-cell">';
             dayEvts.forEach(ev => {
                 const color = ev.member_color || '#0078d4';
-                const evIdx = displayEvents.length;
-                displayEvents.push(ev);
-                html += `<div class="week-event week-event-allday${ev.availability === 'tentative' ? ' week-event-tentative' : ''}" style="background:${esc(color)}" data-ev-idx="${evIdx}" title="${esc(ev.summary)}">${esc(ev.summary)}</div>`;
+                const eventId = getEventId(ev);  // Fix #2: Use event ID
+                html += `<div class="week-event week-event-allday${ev.availability === 'tentative' ? ' week-event-tentative' : ''}" style="background:${esc(color)}" data-event-id="${esc(eventId)}" title="${esc(ev.summary)}">${esc(ev.summary)}</div>`;
             });
             html += '</div>';
         }
@@ -856,16 +904,14 @@
                 const metrics = getEventMetrics(ev);
                 const color = ev.member_color || '#0078d4';
                 const time = formatShortTime(ev.start);
-                const endTime = formatShortTime(ev.end);
-                const evIdx = displayEvents.length;
-                displayEvents.push(ev);
+                const eventId = getEventId(ev);  // Fix #2: Use event ID
                 
                 const width = ev._totalColumns > 1 ? (100 / ev._totalColumns) : 100;
                 const left = ev._totalColumns > 1 ? (ev._column * width) : 0;
                 
                 html += `<div class="week-event-positioned${ev.availability === 'tentative' ? ' week-event-tentative' : ''}" `;
                 html += `style="top:${metrics.top}px;height:${metrics.height}px;left:${left}%;width:${width}%;background:${esc(color)}" `;
-                html += `data-ev-idx="${evIdx}" title="${esc(ev.summary)}">`;
+                html += `data-event-id="${esc(eventId)}" title="${esc(ev.summary)}">`;
                 html += `<div class="week-ev-time">${esc(time)}</div>`;
                 html += `<div class="week-ev-title">${esc(ev.summary)}</div>`;
                 if (ev.location && ev.location !== 'None' && ev.location !== '') {
@@ -890,11 +936,12 @@
             };
         });
         // Week event clicks → open modal
-        $weekGrid.querySelectorAll('.week-event-positioned').forEach(el => {
+        $weekGrid.querySelectorAll('.week-event-positioned, .week-event-allday').forEach(el => {
             el.onclick = (e) => {
                 e.stopPropagation();
-                const idx = parseInt(el.dataset.evIdx);
-                if (!isNaN(idx) && displayEvents[idx]) openEventModal(displayEvents[idx]);
+                const eventId = el.dataset.eventId;
+                if (!eventId) return;
+                openEventModalById(eventId);
             };
         });
     }
@@ -914,21 +961,77 @@
         refresh();
     }
 
+    const DateUtils = {
+        dateToISO(d) {
+            if (!d || Number.isNaN(d.getTime())) return '';
+            return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+        },
+
+        extractISODate(value) {
+            if (!value) return '';
+            const s = String(value);
+            if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.substring(0, 10);
+            const d = new Date(s);
+            if (Number.isNaN(d.getTime())) return '';
+            return d.toISOString().substring(0, 10);
+        },
+
+        addDaysISO(isoDate, days) {
+            const d = new Date(isoDate + 'T00:00:00Z');
+            if (Number.isNaN(d.getTime())) return '';
+            d.setUTCDate(d.getUTCDate() + days);
+            return d.toISOString().substring(0, 10);
+        },
+
+        formatShortTime(iso) {
+            if (!iso || String(iso).length <= 10) return '';
+            try {
+                const d = new Date(iso);
+                if (Number.isNaN(d.getTime())) return '';
+                return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+            } catch (_err) {
+                return '';
+            }
+        },
+
+        formatTimeRange(startISO, endISO) {
+            const s = this.formatShortTime(startISO);
+            const e = this.formatShortTime(endISO);
+            if (s && e) return s + ' \u2013 ' + e;
+            return s || 'All day';
+        },
+
+        formatLongDate(isoDate) {
+            if (!isoDate) return '';
+            const d = new Date(isoDate + 'T00:00:00Z');
+            if (Number.isNaN(d.getTime())) return '';
+            return d.toLocaleDateString(undefined, {
+                weekday: 'long',
+                month: 'long',
+                day: 'numeric',
+                year: 'numeric'
+            });
+        }
+    };
+
     function dateToISO(d) {
-        return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+        return DateUtils.dateToISO(d);
+    }
+
+    function extractISODate(value) {
+        return DateUtils.extractISODate(value);
+    }
+
+    function addDaysISO(isoDate, days) {
+        return DateUtils.addDaysISO(isoDate, days);
     }
 
     function formatShortTime(iso) {
-        if (!iso || iso.length <= 10) return '';
-        const d = new Date(iso);
-        return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+        return DateUtils.formatShortTime(iso);
     }
 
     function formatTimeRange(startISO, endISO) {
-        const s = formatShortTime(startISO);
-        const e = formatShortTime(endISO);
-        if (s && e) return s + ' \u2013 ' + e;
-        return s || 'All day';
+        return DateUtils.formatTimeRange(startISO, endISO);
     }
 
     // Check if password is set to show/hide logout link
@@ -956,18 +1059,33 @@
         );
     }
 
-    function escRegExp(s) {
-        return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    }
-
     function escHL(s) {
-        if (!s) return '';
-        let result = esc(s);
-        if (searchTerm) {
-            const regex = new RegExp('(' + escRegExp(esc(searchTerm)) + ')', 'gi');
-            result = result.replace(regex, '<mark>$1</mark>');
+        const value = s == null ? '' : String(s);
+        const term = (searchTerm || '').trim();
+        const escapedValue = esc(value);
+        if (!term) return escapedValue;
+
+        const escapedTerm = esc(term);
+        if (!escapedTerm) return escapedValue;
+
+        const haystackLower = escapedValue.toLowerCase();
+        const needleLower = escapedTerm.toLowerCase();
+        let cursor = 0;
+        let highlighted = '';
+
+        while (cursor < escapedValue.length) {
+            const idx = haystackLower.indexOf(needleLower, cursor);
+            if (idx === -1) {
+                highlighted += escapedValue.slice(cursor);
+                break;
+            }
+
+            highlighted += escapedValue.slice(cursor, idx);
+            highlighted += '<mark>' + escapedValue.slice(idx, idx + escapedTerm.length) + '</mark>';
+            cursor = idx + escapedTerm.length;
         }
-        return result;
+
+        return highlighted;
     }
 
     function updateSearchCount() {
@@ -977,7 +1095,16 @@
     }
 
     // ===== Event Modal =====
-    function openEventModal(ev) {
+    function openEventModalById(eventId) {
+        if (!eventId) return;
+        const ev = findEventById(eventId);
+        if (!ev) return;
+        openModalEventId = eventId;
+        renderEventModal(ev);
+        $eventModal.classList.add('active');
+    }
+
+    function renderEventModal(ev) {
         hideTooltip();
         $modalTitle.textContent = ev.summary || 'Untitled';
         let html = '';
@@ -986,8 +1113,7 @@
         const timeStr = ev.all_day ? 'All day' : formatTimeRange(ev.start, ev.end);
         let dateStr = '';
         if (ev.start) {
-            const startD = new Date(ev.start.length <= 10 ? ev.start + 'T00:00:00' : ev.start);
-            dateStr = startD.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+            dateStr = DateUtils.formatLongDate(extractISODate(ev.start));
         }
         html += `<div class="modal-row"><span class="modal-icon">&#128197;</span><div class="modal-value"><div class="modal-label">Date & Time</div>${esc(dateStr)}<br>${esc(timeStr)}</div></div>`;
 
@@ -1008,20 +1134,50 @@
         html += `<div class="modal-row"><span class="modal-icon">&#128100;</span><div class="modal-value"><div class="modal-label">Member</div><div class="modal-member"><span class="member-dot" style="background:${esc(ev.member_color || '#0078d4')}"></span>${esc(ev.member_name)}</div></div></div>`;
 
         $modalBody.innerHTML = html;
-        $eventModal.classList.add('active');
+    }
+
+    function syncOpenModalToLatest() {
+        if (!$eventModal.classList.contains('active') || !openModalEventId) return;
+        const latest = findEventById(openModalEventId);
+        if (!latest) {
+            closeEventModal();
+            return;
+        }
+        renderEventModal(latest);
     }
 
     function closeEventModal() {
+        openModalEventId = null;
         $eventModal.classList.remove('active');
+    }
+
+    function getEventId(ev) {
+        if (ev && ev.event_id) return String(ev.event_id);
+        return [
+            ev.member_id || '',
+            ev.summary || '',
+            ev.start || '',
+            ev.end || '',
+            ev.location || '',
+            ev.all_day ? '1' : '0'
+        ].join('|');
+    }
+
+    function findEventById(eventId) {
+        return events.find(ev => getEventId(ev) === eventId) || null;
     }
 
     // ===== Auto-Refresh =====
     function setupAutoRefresh() {
-        if (refreshTimerId) clearInterval(refreshTimerId);
-        const seconds = parseInt(localStorage.getItem('famcal-refresh-interval') || '60');
-        if (seconds <= 0) return;
+        if (refreshTimerId) {
+            clearInterval(refreshTimerId);
+            refreshTimerId = null;
+        }
+        const seconds = parseInt(localStorage.getItem('famcal-refresh-interval') || '60', 10);
+        if (!Number.isFinite(seconds) || seconds <= 0) return;
         refreshTimerId = setInterval(() => {
             if (document.visibilityState === 'hidden') return;
+            if (fetchInFlight) return;
             if (activeMembers.size > 0) fetchEvents(true);
         }, seconds * 1000);
     }
@@ -1037,6 +1193,11 @@
         $refreshIndicator.textContent = 'Updated!';
         $refreshIndicator.className = 'refresh-indicator refresh-updated';
         setTimeout(() => updateRefreshTime(), 3000);
+    }
+
+    function showRefreshError(message) {
+        $refreshIndicator.textContent = message;
+        $refreshIndicator.className = 'refresh-indicator';
     }
 })();
 </script>

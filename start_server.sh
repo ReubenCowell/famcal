@@ -46,6 +46,12 @@ echo ""
 echo "Press Ctrl+C to stop"
 echo ""
 
+# Database Configuration (Optional - Phase 1)
+# Uncomment and configure these to enable database dual-write mode:
+# export FAMCAL_USE_DATABASE=true
+# export SQLALCHEMY_DATABASE_URL="postgresql://user:password@localhost:5432/famcal_db"
+# For SQLite testing: export SQLALCHEMY_DATABASE_URL="sqlite:///famcal.db"
+
 # Start the server
 python family_calendar_server.py \
     --config family_config.json

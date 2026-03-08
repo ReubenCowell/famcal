@@ -39,14 +39,42 @@ ufw enable
 su - famcal
 ```
 
-## 4. Install dependencies
+## 4. Quick Setup (Automated)
+
+For automatic installation of all dependencies and database setup:
+
+```bash
+cd ~
+git clone https://github.com/ReubenCowell/famcal.git
+cd famcal
+chmod +x setup_production.sh
+./setup_production.sh
+```
+
+This script will:
+- ✓ Check and install all required system packages
+- ✓ Set up Python virtual environment
+- ✓ Install Python dependencies
+- ✓ Configure PostgreSQL database
+- ✓ Create `.env` file with database credentials
+- ✓ Test the application
+
+**Then skip to step 8 for systemd setup.**
+
+---
+
+## 4. Manual Setup (Alternative)
+
+If you prefer to set up manually, follow steps 5-7:
+
+### 5. Install dependencies
 
 ```bash
 sudo apt update && sudo apt upgrade -y
-sudo apt install -y python3 python3-pip python3-venv nginx certbot python3-certbot-nginx git
+sudo apt install -y python3 python3-pip python3-venv nginx certbot python3-certbot-nginx git postgresql postgresql-contrib
 ```
 
-## 5. Clone and set up the app
+### 6. Clone and set up the app
 
 ```bash
 cd ~
@@ -58,15 +86,38 @@ pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-## 6. Test it works
+### 7. Set up PostgreSQL database
 
 ```bash
+# Create database and user
+sudo -u postgres psql << 'EOF'
+CREATE DATABASE famcal_db;
+CREATE USER famcal_user WITH ENCRYPTED PASSWORD 'CHANGE_THIS_PASSWORD';
+GRANT ALL PRIVILEGES ON DATABASE famcal_db TO famcal_user;
+\c famcal_db
+GRANT ALL ON SCHEMA public TO famcal_user;
+\q
+EOF
+```
+
+**Important:** Replace `CHANGE_THIS_PASSWORD` with a strong password. Save it — you'll need it for the next step.
+
+---
+
+## 8. Test it works (Manual setup only)
+
+```bash
+# Test with database enabled
+export FAMCAL_USE_DATABASE=true
+export SQLALCHEMY_DATABASE_URL="postgresql://famcal_user:CHANGE_THIS_PASSWORD@localhost:5432/famcal_db"
 python family_calendar_server.py --config family_config.json
 ```
 
 Open `http://<your-droplet-ip>:8000` in a browser. Press `Ctrl+C` to stop.
 
-## 7. Set up Gunicorn as a systemd service
+---
+
+## 9. Set up Gunicorn as a systemd service
 
 Create the service file:
 
@@ -74,7 +125,7 @@ Create the service file:
 sudo tee /etc/systemd/system/famcal.service << 'EOF'
 [Unit]
 Description=Family Calendar Server
-After=network.target
+After=network.target postgresql.service
 
 [Service]
 Type=simple
@@ -82,6 +133,9 @@ User=famcal
 Group=famcal
 WorkingDirectory=/home/famcal/famcal
 Environment="PATH=/home/famcal/famcal/.venv/bin"
+Environment="FAMCAL_USE_DATABASE=true"
+Environment="FAMCAL_DATABASE_ICS=true"
+Environment="SQLALCHEMY_DATABASE_URL=postgresql://famcal_user:CHANGE_THIS_PASSWORD@localhost:5432/famcal_db"
 ExecStart=/home/famcal/famcal/.venv/bin/gunicorn wsgi:application -b 127.0.0.1:8000 -w 2 --timeout 60
 Restart=always
 RestartSec=10
@@ -90,6 +144,8 @@ RestartSec=10
 WantedBy=multi-user.target
 EOF
 ```
+
+**Important:** Replace `CHANGE_THIS_PASSWORD` with the password you set in step 6.
 
 Enable and start:
 
@@ -100,7 +156,7 @@ sudo systemctl start famcal
 sudo systemctl status famcal
 ```
 
-## 8. Set up Nginx reverse proxy
+## 10. Set up Nginx reverse proxy
 
 ```bash
 sudo tee /etc/nginx/sites-available/famcal << 'EOF'
@@ -130,7 +186,7 @@ sudo systemctl restart nginx
 
 Your calendar is now live at `http://<your-droplet-ip>/`
 
-## 9. (Optional) Custom domain + HTTPS
+## 11. (Optional) Custom domain + HTTPS
 
 If you have a domain name:
 
@@ -149,7 +205,7 @@ If you have a domain name:
    "domain": "yourdomain.com"
    ```
 
-## 10. Set up your calendars
+## 12. Set up your calendars
 
 Go to `http://<your-droplet-ip>/admin` (or `https://yourdomain.com/admin`) and add your family members and calendar URLs.
 
