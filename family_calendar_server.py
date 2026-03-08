@@ -60,7 +60,8 @@ class CalendarSource:
     """Configuration for a single calendar source."""
     url: str
     name: str
-    show_details: bool  # If False, only show "Busy" but preserve event's TRANSP/STATUS
+    show_details: bool  # If False, only show busy_text but preserve event's TRANSP/STATUS
+    busy_text: str = "Busy"  # Custom text shown when show_details is False
 
 
 @dataclass
@@ -125,7 +126,8 @@ class FamilyCalendarManager:
                 CalendarSource(
                     url=cal.get("url", ""),
                     name=cal.get("name", "Untitled"),
-                    show_details=cal.get("show_details", True)
+                    show_details=cal.get("show_details", True),
+                    busy_text=cal.get("busy_text", "Busy")
                 )
                 for cal in member_data.get("calendars", [])
             ]
@@ -163,7 +165,8 @@ class FamilyCalendarManager:
                         {
                             "url": cal.url,
                             "name": cal.name,
-                            "show_details": cal.show_details
+                            "show_details": cal.show_details,
+                            "busy_text": cal.busy_text
                         }
                         for cal in member.calendars
                     ]
@@ -282,8 +285,8 @@ def apply_privacy_to_event(event: Event, calendar_source: CalendarSource) -> Eve
     if "STATUS" in event:
         private_event["STATUS"] = event.get("STATUS")  # CONFIRMED, TENTATIVE, or CANCELLED
     
-    # Set generic summary
-    private_event["SUMMARY"] = "Busy"
+    # Set custom busy text
+    private_event["SUMMARY"] = calendar_source.busy_text or "Busy"
     private_event["CLASS"] = "PRIVATE"
     
     # Don't copy description or location (privacy)
@@ -602,6 +605,7 @@ def create_app(manager: FamilyCalendarManager, fetch_timeout: int) -> Flask:
                         "name": cal.name,
                         "has_url": bool(cal.url and cal.url.startswith("http")),
                         "show_details": cal.show_details,
+                        "busy_text": cal.busy_text,
                         "url": cal.url if cal.url else ""
                     }
                     for cal in member.calendars
@@ -609,7 +613,8 @@ def create_app(manager: FamilyCalendarManager, fetch_timeout: int) -> Flask:
             }
             for member in manager.members.values()
         ]
-        return jsonify({"members": members_data})
+        combined_feed_url = f"{protocol}://{host}/family/calendar.ics"
+        return jsonify({"members": members_data, "combined_feed_url": combined_feed_url})
 
     @app.get("/api/status")
     def api_status() -> Response:
@@ -653,11 +658,58 @@ def create_app(manager: FamilyCalendarManager, fetch_timeout: int) -> Flask:
                         "name": cal.name,
                         "has_url": bool(cal.url and cal.url.startswith("http")),
                         "show_details": cal.show_details,
+                        "busy_text": cal.busy_text,
                         "url": cal.url
                     }
                     for cal in member.calendars
                 ]
             })
+
+    @app.get("/family/calendar.ics")
+    def family_combined_feed() -> Response:
+        """Serve a combined ICS feed with all family members' events, prefixed by member name."""
+        combined = Calendar()
+        combined.add("prodid", "-//Family Calendar - Combined//EN")
+        combined.add("version", "2.0")
+        combined.add("calscale", "GREGORIAN")
+        combined.add("x-wr-calname", "Family Calendar")
+
+        seen_tzids: set[str] = set()
+
+        for member_id, member in manager.members.items():
+            output_path = manager.get_output_path(member_id)
+            lock = manager.locks[member_id]
+            with lock:
+                if not output_path.exists():
+                    continue
+                raw = output_path.read_bytes()
+            try:
+                cal = Calendar.from_ical(raw)
+            except Exception:
+                continue
+
+            # Copy timezone components
+            for tz_comp in cal.walk("VTIMEZONE"):
+                tzid_val = tz_comp.get("TZID")
+                tzid = str(tzid_val).strip() if tzid_val else ""
+                if tzid and tzid not in seen_tzids:
+                    seen_tzids.add(tzid)
+                    combined.add_component(tz_comp)
+
+            # Copy events with member name prefix
+            for event in cal.walk("VEVENT"):
+                summary = str(event.get("SUMMARY", "Untitled"))
+                event["SUMMARY"] = f"{member.name}: {summary}"
+                combined.add_component(event)
+
+        return Response(
+            combined.to_ical(),
+            mimetype="text/calendar; charset=utf-8",
+            headers={
+                "Content-Disposition": "inline; filename=family_calendar.ics",
+                "X-Calendar-Name": "Family Calendar"
+            },
+        )
 
     @app.get("/<member_id>/calendar.ics")
     def member_calendar_feed(member_id: str) -> Response:
@@ -810,6 +862,7 @@ def create_app(manager: FamilyCalendarManager, fetch_timeout: int) -> Flask:
             url = data.get("url", "").strip()
             name = data.get("name", "").strip()
             show_details = data.get("show_details", True)
+            busy_text = data.get("busy_text", "Busy").strip() or "Busy"
 
             if not url or not name:
                 return jsonify({"success": False, "error": "URL and name are required"}), 400
@@ -818,7 +871,7 @@ def create_app(manager: FamilyCalendarManager, fetch_timeout: int) -> Flask:
                 return jsonify({"success": False, "error": "URL must start with http:// or https://"}), 400
 
             member = manager.members[member_id]
-            member.calendars.append(CalendarSource(url=url, name=name, show_details=show_details))
+            member.calendars.append(CalendarSource(url=url, name=name, show_details=show_details, busy_text=busy_text))
             manager.statuses[member_id].configured_sources = len(member.calendars)
             
             manager.save_config()
@@ -885,6 +938,9 @@ def create_app(manager: FamilyCalendarManager, fetch_timeout: int) -> Flask:
             
             if "show_details" in data:
                 calendar.show_details = bool(data["show_details"])
+            
+            if "busy_text" in data:
+                calendar.busy_text = data["busy_text"].strip() or "Busy"
             
             manager.save_config()
             

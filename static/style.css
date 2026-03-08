@@ -356,6 +356,7 @@ body {
 }
 .feed-bar .copy-feedback { font-size: .75rem; color: var(--free); font-weight: 600; opacity: 0; transition: opacity .2s; }
 .feed-bar .copy-feedback.show { opacity: 1; }
+.combined-feed-bar { background: var(--surface); }
 
 /* ===== Empty State ===== */
 .empty-state { text-align: center; padding: var(--sp-10); color: var(--text-muted); }

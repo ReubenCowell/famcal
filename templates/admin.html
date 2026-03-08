@@ -95,13 +95,17 @@
             </div>
             <div class="form-group">
                 <div class="checkbox-row">
-                    <input type="checkbox" id="fCalDetails" checked>
+                    <input type="checkbox" id="fCalDetails" checked onchange="document.getElementById('busyTextGroup').style.display = this.checked ? 'none' : 'block'">
                     <label for="fCalDetails" style="margin-bottom:0;font-weight:400;">Show event details</label>
                 </div>
                 <small style="margin-left:24px;display:block;">
-                    Uncheck to hide details and show only &ldquo;Busy&rdquo;.
-                    The event&rsquo;s busy/tentative status from the source calendar is always preserved.
+                    Uncheck to hide details. The event&rsquo;s busy/tentative status from the source calendar is always preserved.
                 </small>
+            </div>
+            <div class="form-group" id="busyTextGroup" style="display:none;">
+                <label for="fCalBusyText">Custom busy text</label>
+                <input type="text" id="fCalBusyText" placeholder="Busy" value="Busy">
+                <small>Text shown instead of event details (e.g. &ldquo;Busy - Fitness&rdquo;)</small>
             </div>
             <div class="form-buttons">
                 <button type="button" class="btn" onclick="closeModal('modalAddCal')">Cancel</button>
@@ -245,9 +249,12 @@
                     html += `<div class="cal-info"><span class="cal-name">${esc(cal.name)}</span> `;
                     html += cal.show_details
                         ? '<span class="badge badge-details">Details shown</span>'
-                        : '<span class="badge badge-privacy">Privacy mode</span>';
+                        : `<span class="badge badge-privacy">Privacy mode</span> <span class="badge" style="background:var(--bg-card);color:var(--text-muted);border:1px solid var(--border);">${esc(cal.busy_text || 'Busy')}</span>`;
                     html += `<div class="cal-url" title="${esc(cal.url)}">${cal.has_url ? esc(cal.url) : '<em>No URL</em>'}</div></div>`;
                     html += `<div class="cal-actions">`;
+                    if (!cal.show_details) {
+                        html += `<button class="btn btn-sm" onclick="editBusyText('${esc(m.id)}',${idx},'${esc(cal.busy_text || 'Busy')}')">&#9998; Busy text</button>`;
+                    }
                     html += `<button class="btn btn-sm" onclick="togglePrivacy('${esc(m.id)}',${idx},${!cal.show_details})">${cal.show_details ? '&#128274; Hide' : '&#128275; Show'}</button>`;
                     html += `<button class="btn btn-danger btn-sm" onclick="deleteCal('${esc(m.id)}',${idx},'${esc(cal.name)}')">Delete</button>`;
                     html += `</div></div>`;
@@ -290,6 +297,8 @@
         document.getElementById('fCalName').value = '';
         document.getElementById('fCalUrl').value = '';
         document.getElementById('fCalDetails').checked = true;
+        document.getElementById('busyTextGroup').style.display = 'none';
+        document.getElementById('fCalBusyText').value = 'Busy';
         openModal('modalAddCal');
     };
 
@@ -299,11 +308,12 @@
         const name = document.getElementById('fCalName').value.trim();
         const url = document.getElementById('fCalUrl').value.trim();
         const show_details = document.getElementById('fCalDetails').checked;
+        const busy_text = document.getElementById('fCalBusyText').value.trim() || 'Busy';
         try {
             const res = await fetch(`/api/admin/members/${encodeURIComponent(mid)}/calendars`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name, url, show_details })
+                body: JSON.stringify({ name, url, show_details, busy_text })
             });
             const r = await res.json();
             if (r.success) { toast(r.message, 'success'); closeModal('modalAddCal'); loadData(); }
@@ -330,6 +340,21 @@
             });
             const r = await res.json();
             if (r.success) { toast('Privacy updated', 'success'); loadData(); }
+            else toast(r.error, 'error');
+        } catch { toast('Failed to update', 'error'); }
+    };
+
+    window.editBusyText = async function(mid, idx, current) {
+        const text = prompt('Custom busy text:', current);
+        if (text === null) return;
+        try {
+            const res = await fetch(`/api/admin/members/${encodeURIComponent(mid)}/calendars/${idx}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ busy_text: text || 'Busy' })
+            });
+            const r = await res.json();
+            if (r.success) { toast('Busy text updated', 'success'); loadData(); }
             else toast(r.error, 'error');
         } catch { toast('Failed to update', 'error'); }
     };

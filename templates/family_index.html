@@ -46,6 +46,14 @@
         <span class="copy-feedback" id="copyFeedback">Copied!</span>
     </div>
 
+    <!-- Combined feed bar -->
+    <div class="feed-bar combined-feed-bar" id="combinedFeedBar" style="display:none;">
+        <span>&#128106; Combined Family Feed:</span>
+        <code id="combinedFeedUrl"></code>
+        <button class="btn btn-sm btn-primary" id="btnCopyCombined">Copy</button>
+        <span class="copy-feedback" id="copyCombinedFeedback">Copied!</span>
+    </div>
+
     <!-- Main content: grid + day panel -->
     <div class="main-content">
         <div class="calendar-area">
@@ -85,6 +93,7 @@
 
     // ===== State =====
     let members = [];
+    let combinedFeedUrl = '';
     let activeMembers = new Set();  // member IDs currently toggled on
     let events = [];
     let viewDate = new Date();     // 1st of current view month
@@ -102,6 +111,8 @@
     const $memberPills = document.getElementById('memberPills');
     const $feedBar     = document.getElementById('feedBar');
     const $feedUrl     = document.getElementById('feedUrl');
+    const $combinedBar = document.getElementById('combinedFeedBar');
+    const $combinedUrl = document.getElementById('combinedFeedUrl');
     const $emptyState  = document.getElementById('emptyState');
     const $dayPanel    = document.getElementById('dayPanel');
     const $dayTitle    = document.getElementById('dayPanelTitle');
@@ -117,6 +128,7 @@
     document.getElementById('btnToday').onclick = () => { viewDate = new Date(); if (currentView !== 'week') viewDate.setDate(1); refresh(); };
     document.getElementById('btnClosePanel').onclick = () => { selectedDate = null; $dayPanel.classList.add('hidden'); renderGrid(); };
     document.getElementById('btnCopy').onclick = copyFeed;
+    document.getElementById('btnCopyCombined').onclick = copyCombinedFeed;
 
     document.getElementById('vsMonth').onclick = () => switchView('month');
     document.getElementById('vsWeek').onclick  = () => switchView('week');
@@ -134,8 +146,10 @@
             const res = await fetch('/api/members');
             const data = await res.json();
             members = data.members || [];
+            combinedFeedUrl = data.combined_feed_url || '';
         } catch (e) {
             members = [];
+            combinedFeedUrl = '';
         }
         if (members.length === 0) {
             $emptyState.style.display = '';
@@ -146,6 +160,11 @@
         $emptyState.style.display = 'none';
         // Activate all members by default
         activeMembers = new Set(members.map(m => m.id));
+        // Show combined feed bar
+        if (combinedFeedUrl && members.length > 0) {
+            $combinedUrl.textContent = combinedFeedUrl;
+            $combinedBar.style.display = '';
+        }
         renderPills();
         refresh();
     }
@@ -193,6 +212,14 @@
         const url = $feedUrl.textContent;
         navigator.clipboard.writeText(url).then(() => {
             const fb = document.getElementById('copyFeedback');
+            fb.classList.add('show');
+            setTimeout(() => fb.classList.remove('show'), 2000);
+        });
+    }
+
+    function copyCombinedFeed() {
+        navigator.clipboard.writeText(combinedFeedUrl).then(() => {
+            const fb = document.getElementById('copyCombinedFeedback');
             fb.classList.add('show');
             setTimeout(() => fb.classList.remove('show'), 2000);
         });
