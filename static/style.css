@@ -173,8 +173,8 @@ body {
 .pill:hover:not(.active) { background: var(--border); }
 
 /* ===== Main Content ===== */
-.main-content { flex: 1; display: flex; overflow: hidden; }
-.calendar-area { flex: 1; overflow: auto; padding: var(--sp-4); }
+.main-content { flex: 1; display: flex; overflow: hidden; min-height: 0; }
+.calendar-area { flex: 1; overflow: auto; padding: var(--sp-4); -webkit-overflow-scrolling: touch; }
 
 /* ===== Month Grid ===== */
 .month-grid {
@@ -487,7 +487,7 @@ body {
 .alert-msg.error { background: var(--busy-bg); color: #8b1a1a; border: 1px solid var(--busy); }
 
 /* ===== Week View ===== */
-.week-grid-wrap { overflow: auto; }
+.week-grid-wrap { overflow: auto; -webkit-overflow-scrolling: touch; }
 .week-grid { min-width: 700px; }
 .week-header-row {
     display: grid;
@@ -654,20 +654,63 @@ body {
     .month-grid .day-cell { min-height: 70px; }
     .toolbar .month-label { min-width: auto; font-size: 1rem; }
     .week-body { max-height: calc(100vh - 220px); }
+    .week-grid { min-width: 600px; }
+    .week-time-gutter { width: auto; }
+    .week-header-row,
+    .week-allday-row,
+    .week-row { grid-template-columns: 54px repeat(7, 1fr); }
 }
 @media (max-width: 600px) {
     .top-nav { padding: 0 var(--sp-3); height: 44px; }
+    .top-nav .brand { font-size: .875rem; }
     .toolbar { padding: var(--sp-2) var(--sp-3); gap: var(--sp-2); }
+    .toolbar .month-label { font-size: .875rem; }
     .member-pills { padding: var(--sp-2) var(--sp-3); }
+    .pill { font-size: .75rem; padding: 2px var(--sp-2); }
     .calendar-area { padding: var(--sp-2); }
     .month-grid .day-cell { min-height: 56px; }
-    .day-event { font-size: .625rem; }
+    .day-event { font-size: .625rem; padding: 1px 3px; }
     .day-number { font-size: .6875rem; }
-    .feed-bar { flex-wrap: wrap; padding: var(--sp-2) var(--sp-3); }
+    .day-cell.today .day-number { width: 20px; height: 20px; font-size: .625rem; }
+    .feed-bar { flex-wrap: wrap; padding: var(--sp-2) var(--sp-3); font-size: .75rem; }
+    .feed-bar code { font-size: .6875rem; }
     .admin-container { padding: var(--sp-3); }
     .member-card-header { flex-direction: column; align-items: flex-start; }
     .cal-row { flex-direction: column; align-items: flex-start; }
     .cal-row .cal-actions { width: 100%; justify-content: flex-end; }
+    .view-switcher button { font-size: .75rem; padding: var(--sp-1) var(--sp-2); }
+    .btn-icon { width: 28px; height: 28px; font-size: .875rem; }
+    .week-grid { min-width: 500px; }
+    .week-header-row,
+    .week-allday-row,
+    .week-row { grid-template-columns: 44px repeat(7, 1fr); }
+    .week-header-cell { font-size: .6875rem; padding: var(--sp-1) 1px; }
+    .week-day-num { font-size: 1rem; }
+    .week-day-num.today-num { width: 26px; height: 26px; }
+    .week-time-label { font-size: .625rem; }
+    .week-event { font-size: .625rem; padding: 1px 3px; }
+    .week-ev-loc { font-size: .5625rem; }
+    .event-card { padding: var(--sp-2); }
+    .event-card .ev-title { font-size: .8125rem; }
+    .event-card .ev-time { font-size: .6875rem; }
+    .event-card .ev-meta { font-size: .6875rem; }
+    .ev-tooltip { max-width: 240px; font-size: .75rem; }
+    .modal-box { width: 95%; padding: var(--sp-4); }
+    .modal-box h2 { font-size: 1.1rem; }
+    .login-box { padding: var(--sp-5); }
+    .login-box h1 { font-size: 1.25rem; }
+}
+@media (max-width: 400px) {
+    .toolbar { flex-wrap: wrap; justify-content: center; }
+    .toolbar .view-switcher { margin-left: 0; width: 100%; justify-content: center; }
+    .toolbar .view-switcher button { flex: 1; text-align: center; }
+    .month-grid .day-cell { min-height: 48px; }
+    .day-event { font-size: .5625rem; }
+    .member-pills .label { display: none; }
+    .pill .dot { width: 8px; height: 8px; }
+    .pill { font-size: .6875rem; }
+    .top-nav .brand { font-size: .8125rem; }
+    .top-nav .nav-links a { font-size: .75rem; padding: var(--sp-1) var(--sp-2); }
 }
 
 @media print {
