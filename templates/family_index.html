@@ -93,6 +93,8 @@
             </div>
             <!-- List view -->
             <div class="list-view" id="listView"></div>
+            <!-- Print-only weekly agenda -->
+            <div class="print-week-sheet" id="printWeekSheet" aria-hidden="true"></div>
             <!-- Empty state -->
             <div class="empty-state" id="emptyState" style="display:none;">
                 <p class="big">No family members configured</p>
@@ -160,6 +162,7 @@
     const $weekGrid    = document.getElementById('weekGrid');
     const $weekWrap    = document.getElementById('weekGridWrap');
     const $listView    = document.getElementById('listView');
+    const $printWeekSheet = document.getElementById('printWeekSheet');
     const $memberPills = document.getElementById('memberPills');
     const $feedBar     = document.getElementById('feedBar');
     const $feedUrl     = document.getElementById('feedUrl');
@@ -199,18 +202,24 @@
         window.location.href = '/family/calendar.ics?download=1';
     };
 
-    function clearPrintMode() {
+    function clearPrintState() {
         document.body.classList.remove('print-color-mode');
+        document.body.classList.remove('print-week-mode');
     }
 
     function printWeek(mode) {
         if (mode === 'color') {
             document.body.classList.add('print-color-mode');
         } else {
-            clearPrintMode();
+            document.body.classList.remove('print-color-mode');
         }
 
-        const openPrintDialog = () => window.print();
+        document.body.classList.add('print-week-mode');
+
+        const openPrintDialog = () => {
+            renderPrintWeekSheet();
+            window.print();
+        };
         if (currentView !== 'week') {
             switchView('week');
             setTimeout(openPrintDialog, 300);
@@ -220,7 +229,7 @@
     }
 
     const $printModeSelect = document.getElementById('printModeSelect');
-    window.addEventListener('afterprint', clearPrintMode);
+    window.addEventListener('afterprint', clearPrintState);
     $printModeSelect.onchange = () => {
         const mode = $printModeSelect.value;
         if (!mode) return;
@@ -721,6 +730,109 @@
                 openEventModalById(eventId);
             };
         });
+    }
+
+    function renderPrintWeekSheet() {
+        if (!$printWeekSheet) return;
+        if (!document.body.classList.contains('print-week-mode')) return;
+
+        const weekStart = new Date(viewDate);
+        weekStart.setDate(weekStart.getDate() - mondayOffset(weekStart));
+        const weekEnd = new Date(weekStart);
+        weekEnd.setDate(weekEnd.getDate() + 6);
+
+        const filtered = getFilteredEvents();
+        const dayMap = buildDayMap(filtered);
+
+        const rangeLabel = weekStart.toLocaleDateString(undefined, {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric'
+        }) + ' - ' + weekEnd.toLocaleDateString(undefined, {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric'
+        });
+
+        const generatedLabel = new Date().toLocaleString(undefined, {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit'
+        });
+
+        let totalEvents = 0;
+        let html = '';
+        html += '<div class="print-sheet-header">';
+        html += '<div class="print-sheet-title-wrap">';
+        html += '<div class="print-sheet-title">Family Calendar - Weekly Schedule</div>';
+        html += `<div class="print-sheet-range">${esc(rangeLabel)}</div>`;
+        html += '</div>';
+        html += `<div class="print-sheet-meta">Generated ${esc(generatedLabel)}</div>`;
+        html += '</div>';
+
+        for (let d = 0; d < 7; d++) {
+            const day = new Date(weekStart);
+            day.setDate(day.getDate() + d);
+            const iso = dateToISO(day);
+            const dayLabel = day.toLocaleDateString(undefined, {
+                weekday: 'long',
+                month: 'short',
+                day: 'numeric'
+            });
+            const dayEvts = (dayMap[iso] || []).slice();
+
+            totalEvents += dayEvts.length;
+
+            html += '<section class="print-day-block">';
+            html += `<div class="print-day-header">${esc(dayLabel)}</div>`;
+            html += '<table class="print-events-table">';
+            html += '<thead><tr>';
+            html += '<th class="col-time">Time</th>';
+            html += '<th class="col-event">Event</th>';
+            html += '<th class="col-member">Member</th>';
+            html += '<th class="col-location">Location</th>';
+            html += '<th class="col-status">Status</th>';
+            html += '</tr></thead><tbody>';
+
+            if (dayEvts.length === 0) {
+                html += '<tr class="print-no-events"><td colspan="5">No events</td></tr>';
+            } else {
+                dayEvts.forEach(ev => {
+                    const color = ev.member_color || '#0078d4';
+                    const timeStr = ev.all_day ? 'All day' : formatTimeRange(ev.start, ev.end);
+                    const summary = ev.summary || 'Untitled';
+                    const memberName = ev.member_name || '-';
+                    const location = (ev.location && ev.location !== 'None') ? ev.location : '-';
+                    const availabilityRaw = (ev.availability || '').toLowerCase();
+                    const availability = availabilityRaw
+                        ? availabilityRaw.charAt(0).toUpperCase() + availabilityRaw.slice(1)
+                        : '-';
+
+                    let rowClass = 'print-event-row';
+                    if (ev.all_day) rowClass += ' print-all-day';
+                    if (availabilityRaw === 'tentative') rowClass += ' print-tentative';
+
+                    html += `<tr class="${rowClass}" style="--print-event-color:${esc(color)}">`;
+                    html += `<td class="col-time">${esc(timeStr)}</td>`;
+                    html += `<td class="col-event"><span class="print-event-title">${esc(summary)}</span></td>`;
+                    html += '<td class="col-member"><span class="print-member-cell">';
+                    html += `<span class="print-member-dot" style="background:${esc(color)}"></span>${esc(memberName)}`;
+                    html += '</span></td>';
+                    html += `<td class="col-location">${esc(location)}</td>`;
+                    html += `<td class="col-status">${esc(availability)}</td>`;
+                    html += '</tr>';
+                });
+            }
+
+            html += '</tbody></table>';
+            html += '</section>';
+        }
+
+        html += `<div class="print-sheet-footer">Total events this week: ${totalEvents}</div>`;
+
+        $printWeekSheet.innerHTML = html;
     }
 
     // ===== Helpers =====

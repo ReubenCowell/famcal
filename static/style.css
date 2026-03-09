@@ -714,6 +714,8 @@ body {
     line-height: 1.4;
 }
 
+.print-week-sheet { display: none; }
+
 /* ===== Login Page ===== */
 .login-container {
     display: flex;
@@ -1017,8 +1019,8 @@ mark { background: #fff3bf; color: #333; border-radius: 2px; padding: 0 1px; }
 
 @media print {
     @page {
-        size: letter portrait;
-        margin: 0.5in 0.35in;
+        size: letter landscape;
+        margin: 0.45in;
     }
 
     .top-nav, .toolbar, .member-pills, .feed-bar, .combined-feed-bar,
@@ -1026,303 +1028,172 @@ mark { background: #fff3bf; color: #333; border-radius: 2px; padding: 0 1px; }
     .search-bar, .refresh-indicator, .refresh-select, .empty-state,
     #btnRefresh, #printModeSelect { display: none !important; }
 
-    body { 
-        background: #fff !important; 
-        color: #000 !important; 
-        -webkit-print-color-adjust: exact; 
+    body {
+        background: #fff !important;
+        color: #000 !important;
+        -webkit-print-color-adjust: exact;
         print-color-adjust: exact;
         font-size: 10pt;
     }
+
     .app-shell { display: block; }
     .main-content { display: block; overflow: visible; margin: 0; padding: 0; }
     .calendar-area { padding: 0; overflow: visible; background: white; }
 
-    /* Month view print styles */
-    .month-grid-wrap {
-        overflow: visible !important;
-    }
-    .month-grid {
-        border: 2px solid #333;
-        border-radius: 0;
-        page-break-inside: avoid;
-    }
-    .month-grid .day-cell {
-        min-height: 70px;
-        border-color: #999;
-        page-break-inside: avoid;
-    }
-    .month-grid .day-header {
-        background: #eee !important;
-        color: #000 !important;
-        border-color: #999;
-    }
-    .day-event {
-        -webkit-print-color-adjust: exact;
-        print-color-adjust: exact;
-        font-size: .625rem;
-    }
-    .span-event {
-        -webkit-print-color-adjust: exact;
-        print-color-adjust: exact;
+    .month-grid-wrap,
+    .week-grid-wrap,
+    .list-view,
+    .day-panel,
+    .empty-state {
+        display: none !important;
     }
 
-    .list-view .date-group-header {
-        border-color: #333;
-        page-break-after: avoid;
-    }
-    .event-card {
-        page-break-inside: avoid;
-        -webkit-print-color-adjust: exact;
-        print-color-adjust: exact;
-        box-shadow: none;
-    }
-    .avail-badge {
-        -webkit-print-color-adjust: exact;
-        print-color-adjust: exact;
-    }
-
-    .month-grid-wrap::before {
-        content: attr(data-print-title);
-        display: block;
-        font-size: 1.25rem;
-        font-weight: 600;
-        margin-bottom: 8px;
-    }
-
-    /* ===== Week View Print Styles - Optimized for B&W ===== */
-    .week-grid-wrap {
+    .print-week-sheet {
         display: block !important;
-        overflow: visible !important;
-    }
-
-    .week-grid-wrap::before {
-        content: attr(data-print-title);
-        display: block;
-        font-size: 14pt;
-        font-weight: 700;
-        color: #000;
-        margin-bottom: 8pt;
-        padding-bottom: 4pt;
-        border-bottom: 2px solid #000;
-    }
-
-    .week-grid {
-        page-break-inside: avoid;
-        background: white;
-    }
-
-    .week-header-row {
-        background: #f5f5f5 !important;
-        border: 1px solid #000;
-        border-bottom: 2px solid #000;
-        grid-template-columns: 60px repeat(7, 1fr);
-        position: static;
-    }
-
-    .week-header-cell {
-        padding: 4pt 2pt;
-        border-right: 1px solid #999;
-        background: #f5f5f5 !important;
-    }
-
-    .week-header-cell:last-child {
-        border-right: none;
-    }
-
-    .week-day-name {
-        font-size: 7pt;
-        font-weight: 700;
-        color: #000;
-        text-transform: uppercase;
-    }
-
-    .week-day-num {
-        font-size: 11pt;
-        font-weight: 700;
-        color: #000;
-    }
-
-    .week-day-num.today-num {
-        background: #ddd !important;
-        color: #000 !important;
-        border: 1px solid #666;
-    }
-
-    .week-allday-row {
-        background: white;
-        border: 1px solid #000;
-        border-top: none;
-        border-bottom: 2px solid #000;
-        grid-template-columns: 60px repeat(7, 1fr);
-        min-height: 18pt;
-    }
-
-    .week-allday-cell {
-        padding: 2pt;
-        border-right: 1px solid #ccc;
-    }
-
-    .week-event-allday {
-        background: white !important;
-        color: #000 !important;
-        border: 1px solid #333 !important;
-        padding: 1pt 3pt;
-        font-size: 7pt;
-        font-weight: 600;
-        margin-bottom: 1pt;
-        box-shadow: none !important;
-    }
-
-    .week-body-container {
-        overflow: visible !important;
-        border: 1px solid #000;
-        border-top: none;
-    }
-
-    .week-body-inner {
-        min-height: auto;
-        height: auto;
-    }
-
-    .week-time-column {
-        width: 60px;
-        background: #f9f9f9 !important;
-        border-right: 2px solid #000;
-        position: static;
-    }
-
-    .week-hour-slot {
-        height: 30pt;
-        border-bottom: 1px solid #ddd;
-        padding: 2pt 4pt 0 0;
-    }
-
-    .week-hour-slot:nth-child(2n) {
-        background: #fafafa;
-    }
-
-    .week-time-label {
-        font-size: 6.5pt;
-        color: #000;
-        font-weight: 500;
-    }
-
-    .week-time-gutter {
-        display: flex;
-        align-items: flex-start;
-        justify-content: flex-end;
-    }
-
-    .week-days-grid {
-        grid-template-columns: repeat(7, 1fr);
-    }
-
-    .week-day-column {
-        border-right: 1px solid #ccc;
-        background: white !important;
-    }
-
-    .week-day-column:last-child {
-        border-right: none;
-    }
-
-    .week-day-column.today {
-        background: #f5f5f5 !important;
-    }
-
-    .week-hour-line {
-        border-top: 1px solid #e5e5e5;
-        background: none;
-    }
-
-    /* Events - B&W optimized with border patterns */
-    .week-event-positioned {
-        background: white !important;
-        color: #000 !important;
-        border: 1.5pt solid #333 !important;
-        box-shadow: none !important;
-        padding: 2pt 3pt;
-        font-size: 7pt;
-        line-height: 1.2;
-        page-break-inside: avoid;
-        transform: none !important;
-    }
-
-    .week-event-positioned:hover {
-        transform: none !important;
-        box-shadow: none !important;
-    }
-
-    /* Different border styles for event types */
-    .week-event-positioned.week-event-tentative {
-        border-style: dashed !important;
-        border-width: 1pt !important;
-        background: repeating-linear-gradient(
-            45deg,
-            white,
-            white 3pt,
-            #f0f0f0 3pt,
-            #f0f0f0 6pt
-        ) !important;
-    }
-
-    .week-ev-time {
-        font-size: 6.5pt;
-        font-weight: 700;
-        color: #000;
-        margin-bottom: 1pt;
-    }
-
-    .week-ev-title {
-        font-size: 7pt;
-        font-weight: 600;
-        color: #000;
-        overflow: visible;
-        word-break: break-word;
-    }
-
-    .week-ev-loc {
-        font-size: 6pt;
-        color: #333;
-        margin-top: 1pt;
-    }
-
-    /* Optional color print mode, toggled by the Print Color button. */
-    body.print-color-mode .week-event-allday,
-    body.print-color-mode .week-event-positioned {
-        background: var(--print-event-color, #0078d4) !important;
-        color: #fff !important;
-        border-color: rgba(0, 0, 0, 0.35) !important;
         -webkit-print-color-adjust: exact;
         print-color-adjust: exact;
     }
 
-    body.print-color-mode .week-event-positioned {
-        border-width: 1pt !important;
-        border-style: solid !important;
+    .print-sheet-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-end;
+        gap: 12pt;
+        border-bottom: 2px solid #111;
+        margin-bottom: 10pt;
+        padding-bottom: 6pt;
     }
 
-    body.print-color-mode .week-event-positioned.week-event-tentative,
-    body.print-color-mode .week-event-allday.week-event-tentative {
-        border-style: dashed !important;
-        border-width: 1pt !important;
-        background-image: repeating-linear-gradient(
-            -45deg,
-            transparent,
-            transparent 4pt,
-            rgba(255,255,255,.35) 4pt,
-            rgba(255,255,255,.35) 8pt
-        ) !important;
+    .print-sheet-title {
+        font-size: 15pt;
+        font-weight: 700;
     }
 
-    body.print-color-mode .week-ev-time,
-    body.print-color-mode .week-ev-title {
-        color: #fff !important;
-        text-shadow: 0 1px 1px rgba(0, 0, 0, 0.35);
+    .print-sheet-range {
+        margin-top: 2pt;
+        font-size: 9.5pt;
+        color: #333;
     }
 
-    body.print-color-mode .week-ev-loc {
-        color: rgba(255,255,255,.92) !important;
-        text-shadow: 0 1px 1px rgba(0, 0, 0, 0.35);
+    .print-sheet-meta {
+        font-size: 8.5pt;
+        color: #444;
+        white-space: nowrap;
+        text-align: right;
+    }
+
+    .print-day-block {
+        border: 1px solid #444;
+        margin-bottom: 8pt;
+        page-break-inside: avoid;
+        break-inside: avoid;
+    }
+
+    .print-day-header {
+        padding: 4pt 6pt;
+        font-size: 10pt;
+        font-weight: 700;
+        color: #000;
+        background: #f0f0f0;
+        border-bottom: 1px solid #666;
+    }
+
+    .print-events-table {
+        width: 100%;
+        border-collapse: collapse;
+        table-layout: fixed;
+    }
+
+    .print-events-table th,
+    .print-events-table td {
+        border: 1px solid #c6c6c6;
+        padding: 4pt 5pt;
+        vertical-align: top;
+        font-size: 8.5pt;
+        color: #111;
+    }
+
+    .print-events-table th {
+        background: #f7f7f7;
+        text-transform: uppercase;
+        letter-spacing: .02em;
+        font-size: 7.5pt;
+        color: #222;
+    }
+
+    .print-events-table .col-time {
+        width: 12%;
+        white-space: nowrap;
+        font-weight: 600;
+    }
+
+    .print-events-table .col-event {
+        width: 36%;
+    }
+
+    .print-events-table .col-member {
+        width: 16%;
+    }
+
+    .print-events-table .col-location {
+        width: 24%;
+    }
+
+    .print-events-table .col-status {
+        width: 12%;
+        white-space: nowrap;
+        text-transform: capitalize;
+    }
+
+    .print-event-title {
+        font-weight: 600;
+    }
+
+    .print-member-cell {
+        display: inline-flex;
+        align-items: center;
+        gap: 4pt;
+    }
+
+    .print-member-dot {
+        width: 8pt;
+        height: 8pt;
+        border-radius: 50%;
+        border: 1px solid #222;
+        flex-shrink: 0;
+    }
+
+    .print-event-row.print-all-day .col-time {
+        font-style: italic;
+    }
+
+    .print-event-row.print-tentative .col-status {
+        font-style: italic;
+    }
+
+    .print-no-events td {
+        padding: 6pt;
+        text-align: center;
+        color: #666;
+        font-style: italic;
+    }
+
+    .print-sheet-footer {
+        margin-top: 8pt;
+        text-align: right;
+        font-size: 8pt;
+        color: #555;
+    }
+
+    body.print-color-mode .print-day-header {
+        background: #e8edf7;
+    }
+
+    body.print-color-mode .print-event-row .col-time {
+        border-left: 3pt solid var(--print-event-color, #0078d4);
+    }
+
+    body.print-color-mode .print-member-dot {
+        border-color: rgba(0, 0, 0, 0.3);
     }
 }
