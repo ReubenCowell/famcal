@@ -49,6 +49,11 @@
                 <button id="vsWeek" title="Week view">Week</button>
                 <button id="vsList" title="List view">List</button>
             </div>
+            <select class="refresh-select" id="printModeSelect" title="Print weekly view">
+                <option value="">Print...</option>
+                <option value="bw">Print B/W</option>
+                <option value="color">Print Color</option>
+            </select>
         </div>
     </div>
 
@@ -192,6 +197,35 @@
     };
     document.getElementById('btnDownloadCombined').onclick = () => {
         window.location.href = '/family/calendar.ics?download=1';
+    };
+
+    function clearPrintMode() {
+        document.body.classList.remove('print-color-mode');
+    }
+
+    function printWeek(mode) {
+        if (mode === 'color') {
+            document.body.classList.add('print-color-mode');
+        } else {
+            clearPrintMode();
+        }
+
+        const openPrintDialog = () => window.print();
+        if (currentView !== 'week') {
+            switchView('week');
+            setTimeout(openPrintDialog, 300);
+            return;
+        }
+        openPrintDialog();
+    }
+
+    const $printModeSelect = document.getElementById('printModeSelect');
+    window.addEventListener('afterprint', clearPrintMode);
+    $printModeSelect.onchange = () => {
+        const mode = $printModeSelect.value;
+        if (!mode) return;
+        printWeek(mode);
+        $printModeSelect.value = '';
     };
 
     document.getElementById('vsMonth').onclick = () => switchView('month');
@@ -470,6 +504,7 @@
 
         // Set print title
         $monthWrap.setAttribute('data-print-title', $monthLabel.textContent || '');
+        $weekWrap.setAttribute('data-print-title', $monthLabel.textContent || '');
     }
 
     // ===== Month Grid =====
@@ -815,7 +850,7 @@
             dayEvts.forEach(ev => {
                 const color = ev.member_color || '#0078d4';
                 const eventId = getEventId(ev);  // Fix #2: Use event ID
-                html += `<div class="week-event week-event-allday${ev.availability === 'tentative' ? ' week-event-tentative' : ''}" style="background:${esc(color)}" data-event-id="${esc(eventId)}" title="${esc(ev.summary)}">${esc(ev.summary)}</div>`;
+                html += `<div class="week-event week-event-allday${ev.availability === 'tentative' ? ' week-event-tentative' : ''}" style="background:${esc(color)};--print-event-color:${esc(color)}" data-event-id="${esc(eventId)}" title="${esc(ev.summary)}">${esc(ev.summary)}</div>`;
             });
             html += '</div>';
         }
@@ -912,7 +947,7 @@
                 const left = ev._totalColumns > 1 ? (ev._column * width) : 0;
                 
                 html += `<div class="week-event-positioned${ev.availability === 'tentative' ? ' week-event-tentative' : ''}" `;
-                html += `style="top:${metrics.top}px;height:${metrics.height}px;left:${left}%;width:${width}%;background:${esc(color)}" `;
+                html += `style="top:${metrics.top}px;height:${metrics.height}px;left:${left}%;width:${width}%;background:${esc(color)};--print-event-color:${esc(color)}" `;
                 html += `data-event-id="${esc(eventId)}" title="${esc(ev.summary)}">`;
                 html += `<div class="week-ev-time">${esc(time)}</div>`;
                 html += `<div class="week-ev-title">${esc(ev.summary)}</div>`;
