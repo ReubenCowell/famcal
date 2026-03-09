@@ -34,6 +34,25 @@ GET /api/events?start=2026-03-01&end=2026-04-01&member_ids=alex,ben
 | `end` | ISO date, range end (exclusive) |
 | `member_ids` | Comma-separated member IDs (default: all) |
 
+## Event Range Behavior
+
+- `/api/events` and `/api/<member_id>/events` use the supplied `start`/`end` window to return only events that overlap that range.
+- Recurring events are expanded into occurrences for bounded range queries (`start` + `end` provided), so the API matches what calendar clients show from the same ICS feed.
+
+## Response Limits
+
+- Event APIs include server-side safety caps to prevent oversized payloads.
+- Defaults:
+	- Member endpoint (`/api/<member_id>/events`): `100000`
+	- Combined endpoint (`/api/events`): `1000000`
+- Configure with environment variables:
+	- `FAMCAL_API_MEMBER_EVENTS_LIMIT`
+	- `FAMCAL_API_COMBINED_EVENTS_LIMIT`
+- If a response is clipped, payload includes:
+	- `truncated: true`
+	- `total_events`
+	- `limit`
+
 ## Admin Endpoints
 
 | Method | Path | Description |

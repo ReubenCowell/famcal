@@ -36,6 +36,13 @@ import requests
 from flask import Flask, Response, g, jsonify, redirect, render_template, request, session, url_for
 from icalendar import Calendar, Event
 
+RECURRENCE_EXPANSION_AVAILABLE = False
+try:
+    import recurring_ical_events
+    RECURRENCE_EXPANSION_AVAILABLE = True
+except ImportError:
+    recurring_ical_events = None
+
 # Database integration (Phase 1: Dual-write mode)
 DATABASE_AVAILABLE = False
 try:
@@ -56,6 +63,23 @@ DEFAULT_MEMBER_COLOR = "#0078d4"
 ALLOWED_SOURCE_TYPES = {"ics", "caldav"}
 USE_DATABASE = os.getenv("FAMCAL_USE_DATABASE", "false").lower() == "true"  # Feature flag
 USE_DATABASE_FOR_ICS = os.getenv("FAMCAL_DATABASE_ICS", "true").lower() == "true"  # Phase 3: Database-first ICS generation
+
+
+def _safe_positive_int_env(var_name: str, default_value: int, minimum: int = 1) -> int:
+    """Read a positive integer env var with a safe fallback."""
+    raw_value = (os.getenv(var_name, "") or "").strip()
+    if not raw_value:
+        return default_value
+    try:
+        parsed_value = int(raw_value)
+    except ValueError:
+        return default_value
+    return max(minimum, parsed_value)
+
+
+# Keep API limits high by default so large family calendars do not get clipped in UI views.
+API_MEMBER_EVENTS_LIMIT = _safe_positive_int_env("FAMCAL_API_MEMBER_EVENTS_LIMIT", 100000, minimum=1000)
+API_COMBINED_EVENTS_LIMIT = _safe_positive_int_env("FAMCAL_API_COMBINED_EVENTS_LIMIT", 1000000, minimum=5000)
 
 # Predefined member colors for calendar display
 MEMBER_COLORS = [
@@ -1022,6 +1046,29 @@ def _parse_iso_value(value: str | None) -> datetime | date | None:
         return None
 
 
+def _iter_events_for_range(
+    cal: Calendar,
+    filter_start: date | None,
+    filter_end: date | None,
+) -> list[Event]:
+    """Return VEVENT components, expanding recurrences for bounded queries when possible."""
+    if not (filter_start and filter_end):
+        return list(cal.walk("VEVENT"))
+
+    if not RECURRENCE_EXPANSION_AVAILABLE:
+        return list(cal.walk("VEVENT"))
+
+    window_start = datetime.combine(filter_start, datetime.min.time(), tzinfo=timezone.utc)
+    window_end = datetime.combine(filter_end, datetime.min.time(), tzinfo=timezone.utc)
+
+    try:
+        expanded = recurring_ical_events.of(cal).between(window_start, window_end)
+        return list(expanded)
+    except Exception as exc:
+        logging.warning("Recurring expansion failed (%s); falling back to raw VEVENTs", exc)
+        return list(cal.walk("VEVENT"))
+
+
 def _is_valid_event_payload(payload: dict[str, Any]) -> bool:
     """Validate extracted event payload before returning to API callers."""
     required_fields = ("member_id", "member_name", "member_color", "summary", "availability")
@@ -1078,7 +1125,10 @@ def _extract_events(
     member_color = _normalize_member_color(member.color)
 
     events = []
-    for event in cal.walk("VEVENT"):
+    seen_event_ids: set[str] = set()
+    event_components = _iter_events_for_range(cal, filter_start, filter_end)
+
+    for event in event_components:
         dtstart = event.get("DTSTART")
         dtend = event.get("DTEND")
 
@@ -1119,7 +1169,15 @@ def _extract_events(
         if end_obj and start_obj and type(start_obj) is type(end_obj) and end_obj < start_obj:
             end_iso = start_iso
 
+        recurrence_id_iso = _normalize_dt(event.get("RECURRENCE-ID"))
+        instance_key = recurrence_id_iso or start_iso or ""
         event_id = f"{member_id}:{event_uid(event, source_namespace=member_id)}"
+        if instance_key:
+            event_id = f"{event_id}:{instance_key}"
+
+        if event_id in seen_event_ids:
+            continue
+        seen_event_ids.add(event_id)
 
         event_payload = {
             "event_id": event_id,
@@ -1572,7 +1630,13 @@ def create_app(manager: FamilyCalendarManager, fetch_timeout: int) -> Flask:
             events = _extract_events(cal, member, range_start, range_end)
             events.sort(key=lambda e: e["start"] or "")
 
-            return jsonify({"events": events[:500]})
+            payload: dict[str, Any] = {"events": events[:API_MEMBER_EVENTS_LIMIT]}
+            if len(events) > API_MEMBER_EVENTS_LIMIT:
+                payload["truncated"] = True
+                payload["total_events"] = len(events)
+                payload["limit"] = API_MEMBER_EVENTS_LIMIT
+
+            return jsonify(payload)
 
         except Exception as exc:
             logging.exception("Failed to get events for %s", member_id)
@@ -1634,7 +1698,12 @@ def create_app(manager: FamilyCalendarManager, fetch_timeout: int) -> Flask:
                 logging.warning("Failed to read events for %s: %s", mid, exc)
 
         all_events.sort(key=lambda e: e["start"] or "")
-        payload = {"events": all_events[:5000]}
+        payload: dict[str, Any] = {"events": all_events[:API_COMBINED_EVENTS_LIMIT]}
+        if len(all_events) > API_COMBINED_EVENTS_LIMIT:
+            payload["truncated"] = True
+            payload["total_events"] = len(all_events)
+            payload["limit"] = API_COMBINED_EVENTS_LIMIT
+
         if invalid_ids:
             payload["ignored_member_ids"] = invalid_ids
         if partial_errors:
@@ -1962,6 +2031,11 @@ def make_app_from_env() -> Flask:
     else:
         logging.warning("Database not available - running in file-only mode")
 
+    if RECURRENCE_EXPANSION_AVAILABLE:
+        logging.info("Recurring event expansion enabled for /api/events date-range queries")
+    else:
+        logging.warning("Recurring event expansion unavailable; install recurring-ical-events for complete API views")
+
     mgr = FamilyCalendarManager(config_path)
     if mgr.members:
         refresh_all_calendars(mgr, fetch_timeout)
@@ -2005,6 +2079,11 @@ def main() -> None:
         level=getattr(logging, args.log_level),
         format="%(asctime)s %(levelname)s %(message)s",
     )
+
+    if RECURRENCE_EXPANSION_AVAILABLE:
+        logging.info("Recurring event expansion enabled for /api/events date-range queries")
+    else:
+        logging.warning("Recurring event expansion unavailable; install recurring-ical-events for complete API views")
 
     # Load configuration
     config_path = Path(args.config).resolve()

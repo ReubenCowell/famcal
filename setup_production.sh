@@ -215,6 +215,10 @@ SQLALCHEMY_DATABASE_URL=$DB_URL
 FAMILY_CONFIG=family_config.json
 LOG_LEVEL=INFO
 
+# API response limits (set high to avoid truncated calendar views)
+FAMCAL_API_MEMBER_EVENTS_LIMIT=100000
+FAMCAL_API_COMBINED_EVENTS_LIMIT=1000000
+
 # Optional website password gate (preferred over plain-text config password)
 # FAMCAL_WEB_PASSWORD=change-me
 
